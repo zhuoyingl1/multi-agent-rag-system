@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 3 adds a deterministic multi-agent workflow. The project can now plan specialist roles, retrieve evidence, run expert agents, judge grounding, and compose a local answer.
+Step 4 adds document ingestion for local files. The project can now load text, Markdown, JSON, CSV, and basic text-based PDF files before chunking, retrieval, and local multi-agent answering.
 
 ## Implemented Capabilities
 
@@ -17,10 +17,11 @@ Step 3 adds a deterministic multi-agent workflow. The project can now plan speci
 - Retrieval result scoring, highlights, and chunk-level deduplication
 - Deterministic planner, coordinator, expert, grounding judge, and summarizer agents
 - Local `ask` command for an end-to-end workflow demo
+- Document ingestion for text, Markdown, JSON, CSV, and basic text-based PDF files
+- Local `ingest` command for document loading and chunking inspection
 
 ## Planned Capabilities
 
-- Document ingestion for local demo documents and uploaded files
 - FastAPI endpoints with Server-Sent Events for inspectable workflow progress
 - Evaluation metrics, health checks, and deterministic fallback behavior
 - Optional production-style integrations for LangGraph, Qdrant, Neo4j, and reranking
@@ -32,6 +33,7 @@ $env:PYTHONPATH = "D:\my_projects\multi-agent-rag-system-v2\src"
 python -m pytest -q
 python -m multi_agent_rag --help
 python -m multi_agent_rag plan
+python -m multi_agent_rag ingest examples/sample_docs.md
 python -m multi_agent_rag ask "How does RAG reduce hallucination?"
 ```
 
@@ -46,6 +48,7 @@ tests/                 Local tests that avoid external services
 ## Development Approach
 
 This project is intentionally built in small commits. Each step should add one clear capability, include focused tests, and keep the project runnable without paid APIs or external databases.
+
 
 
 

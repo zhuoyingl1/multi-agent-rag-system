@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 
 from multi_agent_rag import __version__
-from multi_agent_rag.models import Document
+from multi_agent_rag.documents import load_document
 from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.hybrid import HybridRetriever
 from multi_agent_rag.workflow import MultiAgentRAGWorkflow
@@ -26,8 +26,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     ask_parser = subparsers.add_parser("ask", help="Run a local deterministic multi-agent RAG demo.")
     ask_parser.add_argument("query", help="Research question to answer from the demo documents.")
-    ask_parser.add_argument("--document", default="examples/sample_docs.md", help="Path to a local text or Markdown document.")
+    ask_parser.add_argument("--document", default="examples/sample_docs.md", help="Path to a local supported document.")
     ask_parser.set_defaults(func=run_ask)
+
+    ingest_parser = subparsers.add_parser("ingest", help="Load and chunk a local supported document.")
+    ingest_parser.add_argument("document", help="Path to a local supported document.")
+    ingest_parser.set_defaults(func=run_ingest)
 
     return parser
 
@@ -37,7 +41,7 @@ def print_plan(_args: argparse.Namespace) -> int:
         "1. Project scaffold and local test harness",
         "2. Document models and structured chunking",
         "3. Local hybrid retrieval",
-        "4. Multi-agent workflow",
+        "4. Multi-agent workflow and document ingestion",
         "5. API, streaming, metrics, and demo evidence",
     ]
     print("Implementation plan:")
@@ -46,11 +50,7 @@ def print_plan(_args: argparse.Namespace) -> int:
     return 0
 
 def run_ask(args: argparse.Namespace) -> int:
-    document_path = Path(args.document)
-    if not document_path.exists():
-        raise SystemExit(f"Document not found: {document_path}")
-
-    document = Document(title=document_path.name, text=document_path.read_text(encoding="utf-8"))
+    document = load_document(Path(args.document))
     retriever = HybridRetriever()
     retriever.index(chunk_document(document))
     result = MultiAgentRAGWorkflow(retriever).run(args.query)
@@ -64,6 +64,21 @@ def run_ask(args: argparse.Namespace) -> int:
         print(f"- {key}: {value}")
     return 0
 
+def run_ingest(args: argparse.Namespace) -> int:
+    document = load_document(Path(args.document))
+    chunks = chunk_document(document)
+    counts: dict[str, int] = {}
+    for chunk in chunks:
+        counts[chunk.chunk_type.value] = counts.get(chunk.chunk_type.value, 0) + 1
+
+    print(f"Document: {document.title}")
+    print(f"Type: {document.metadata['document_type']}")
+    print(f"Characters: {len(document.text)}")
+    print(f"Chunks: {len(chunks)}")
+    for chunk_type, count in sorted(counts.items()):
+        print(f"- {chunk_type}: {count}")
+    return 0
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -71,4 +86,6 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
     return args.func(args)
+
+
 

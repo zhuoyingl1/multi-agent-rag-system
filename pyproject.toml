@@ -9,7 +9,9 @@ description = "A clean multi-agent RAG prototype with inspectable workflow stage
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Zhuoying Li" }]
-dependencies = []
+dependencies = [
+  "pypdf>=4.2.0",
+]
 
 [project.scripts]
 rag-agent = "multi_agent_rag.cli:main"
@@ -19,3 +21,4 @@ dev = ["pytest>=8.0.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
