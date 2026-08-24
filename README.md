@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 5 improves local answer quality and Windows console robustness. The CLI now configures UTF-8 output, and the deterministic agents produce structured answers with evidence and unsupported-claim sections.
+Step 6 adds the FastAPI service layer and basic runtime metrics. The project now exposes health, metrics, query, and SSE query endpoints when API dependencies are installed.
 
 ## Implemented Capabilities
 
@@ -21,10 +21,11 @@ Step 5 improves local answer quality and Windows console robustness. The CLI now
 - Local `ingest` command for document loading and chunking inspection
 - UTF-8 CLI output configuration for PDF text with special characters
 - Structured deterministic answers with evidence and unsupported-claim reporting
+- FastAPI application with `/health`, `/health/metrics`, `/query`, and `/query/stream`
+- In-memory metrics registry for local observability
 
 ## Planned Capabilities
 
-- FastAPI endpoints with Server-Sent Events for inspectable workflow progress
 - Evaluation metrics, health checks, and deterministic fallback behavior
 - Optional production-style integrations for LangGraph, Qdrant, Neo4j, and reranking
 
@@ -32,11 +33,13 @@ Step 5 improves local answer quality and Windows console robustness. The CLI now
 
 ```powershell
 $env:PYTHONPATH = "D:\my_projects\multi-agent-rag-system-v2\src"
+python -m pip install -e ".[dev]"
 python -m pytest -q
 python -m multi_agent_rag --help
 python -m multi_agent_rag plan
 python -m multi_agent_rag ingest examples/sample_docs.md
 python -m multi_agent_rag ask "How does RAG reduce hallucination?"
+uvicorn multi_agent_rag.api.main:app --reload --app-dir src
 ```
 
 ## Project Layout
@@ -50,6 +53,8 @@ tests/                 Local tests that avoid external services
 ## Development Approach
 
 This project is intentionally built in small commits. Each step should add one clear capability, include focused tests, and keep the project runnable without paid APIs or external databases.
+
+
 
 
 
