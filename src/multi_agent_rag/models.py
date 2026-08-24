@@ -7,6 +7,14 @@ from enum import Enum
 from hashlib import sha256
 
 
+class RetrievalType(str, Enum):
+    """Retrieval signal types used by the local hybrid retriever."""
+
+    KEYWORD = "keyword"
+    VECTOR = "vector"
+    ENTITY = "entity"
+
+
 class ChunkType(str, Enum):
     """Supported chunk categories used by the local retrieval pipeline."""
 
@@ -47,3 +55,13 @@ class Chunk:
 def stable_chunk_id(document_id: str, index: int, chunk_type: ChunkType, text: str) -> str:
     digest = sha256(f"{document_id}\n{index}\n{chunk_type.value}\n{text}".encode("utf-8")).hexdigest()[:16]
     return f"chunk_{digest}"
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    """A scored retrieval result with lightweight highlights."""
+
+    chunk: Chunk
+    score: float
+    retrieval_type: RetrievalType
+    highlights: list[str] = field(default_factory=list)

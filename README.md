@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 1 adds core document models and Markdown-aware structured chunking. The project can now convert a source document into stable prose, code, table, and formula chunks.
+Step 2 adds local hybrid retrieval. The project can now index structured chunks and retrieve relevant evidence with keyword, vector-like, and entity expansion signals.
 
 ## Implemented Capabilities
 
@@ -13,11 +13,12 @@ Step 1 adds core document models and Markdown-aware structured chunking. The pro
 - Core `Document` and `Chunk` models
 - Stable document and chunk identifiers
 - Structured chunking for prose, fenced code blocks, Markdown tables, and formula blocks
+- Local hybrid retrieval with keyword, vector-like, and entity expansion signals
+- Retrieval result scoring, highlights, and chunk-level deduplication
 
 ## Planned Capabilities
 
 - Document ingestion for local demo documents and uploaded files
-- Local hybrid retrieval with keyword, vector-like, and entity expansion signals
 - Planner, coordinator, expert, grounding judge, and summarizer agents
 - FastAPI endpoints with Server-Sent Events for inspectable workflow progress
 - Evaluation metrics, health checks, and deterministic fallback behavior
@@ -43,3 +44,5 @@ tests/                 Local tests that avoid external services
 ## Development Approach
 
 This project is intentionally built in small commits. Each step should add one clear capability, include focused tests, and keep the project runnable without paid APIs or external databases.
+
+
