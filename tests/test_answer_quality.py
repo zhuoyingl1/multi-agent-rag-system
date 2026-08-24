@@ -39,6 +39,25 @@ def test_summarizer_outputs_structured_sections() -> None:
     assert "Sources:" in result.answer
 
 
+def test_summarizer_starts_with_direct_project_answer() -> None:
+    workflow = MultiAgentRAGWorkflow(HybridRetriever())
+    document = Document(
+        title="resume.md",
+        text=(
+            "Projects Multi-Agent RAG System 08/2025-12/2025 "
+            "Tech Stack: LangGraph, Qdrant, Neo4j, FastAPI, Next.js. "
+            "Built a multi-agent RAG platform for document research."
+        ),
+    )
+    workflow.retriever.index(chunk_document(document))
+
+    result = workflow.run("Which resume projects mention RAG, FastAPI, Next.js, LangGraph, Qdrant, or Neo4j?")
+
+    assert "Answer:\nThe strongest retrieved match is Multi-Agent RAG System" in result.answer
+    assert "supported by evidence mentioning" in result.answer
+    assert "Analysis:" in result.answer
+
+
 def test_summarizer_lists_unsupported_claims() -> None:
     answer = SummarizerAgent().summarize(
         query="What is unsupported?",

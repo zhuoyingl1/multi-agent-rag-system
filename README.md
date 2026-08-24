@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 6 adds the FastAPI service layer and basic runtime metrics. The project now exposes health, metrics, query, and SSE query endpoints when API dependencies are installed.
+Step 7 improves the final answer format so CLI and API responses start with a direct grounded answer, followed by agent analysis, evidence, grounding details, and sources.
 
 ## Implemented Capabilities
 
@@ -21,6 +21,7 @@ Step 6 adds the FastAPI service layer and basic runtime metrics. The project now
 - Local `ingest` command for document loading and chunking inspection
 - UTF-8 CLI output configuration for PDF text with special characters
 - Structured deterministic answers with evidence and unsupported-claim reporting
+- Direct answer formatting for project-style and evidence-backed questions
 - FastAPI application with `/health`, `/health/metrics`, `/query`, and `/query/stream`
 - In-memory metrics registry for local observability
 
