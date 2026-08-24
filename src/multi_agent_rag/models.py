@@ -65,3 +65,57 @@ class SearchResult:
     score: float
     retrieval_type: RetrievalType
     highlights: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class AgentPlan:
+    """Planner output describing selected agents and their tasks."""
+
+    selected_agents: list[str]
+    tasks: dict[str, str]
+    reasoning: str
+
+
+@dataclass(frozen=True)
+class Coordination:
+    """Coordinator output that binds a plan to retrieved evidence."""
+
+    selected_agents: list[str]
+    tasks: dict[str, str]
+    sources: list[SearchResult]
+    evidence_count: int
+    reasoning: str
+
+
+@dataclass(frozen=True)
+class AgentResult:
+    """Specialist agent output grounded in retrieved sources."""
+
+    agent_name: str
+    task: str
+    content: str
+    confidence: float
+    sources: list[SearchResult] = field(default_factory=list)
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class JudgeResult:
+    """Grounding judge result for a draft answer."""
+
+    score: float
+    reason: str
+    unsupported_claims: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class WorkflowResult:
+    """End-to-end workflow response."""
+
+    query: str
+    answer: str
+    plan: AgentPlan
+    agents: list[AgentResult]
+    grounding: JudgeResult
+    sources: list[SearchResult]
+    metrics: dict[str, float | int | str]

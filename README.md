@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 2 adds local hybrid retrieval. The project can now index structured chunks and retrieve relevant evidence with keyword, vector-like, and entity expansion signals.
+Step 3 adds a deterministic multi-agent workflow. The project can now plan specialist roles, retrieve evidence, run expert agents, judge grounding, and compose a local answer.
 
 ## Implemented Capabilities
 
@@ -15,11 +15,12 @@ Step 2 adds local hybrid retrieval. The project can now index structured chunks 
 - Structured chunking for prose, fenced code blocks, Markdown tables, and formula blocks
 - Local hybrid retrieval with keyword, vector-like, and entity expansion signals
 - Retrieval result scoring, highlights, and chunk-level deduplication
+- Deterministic planner, coordinator, expert, grounding judge, and summarizer agents
+- Local `ask` command for an end-to-end workflow demo
 
 ## Planned Capabilities
 
 - Document ingestion for local demo documents and uploaded files
-- Planner, coordinator, expert, grounding judge, and summarizer agents
 - FastAPI endpoints with Server-Sent Events for inspectable workflow progress
 - Evaluation metrics, health checks, and deterministic fallback behavior
 - Optional production-style integrations for LangGraph, Qdrant, Neo4j, and reranking
@@ -31,6 +32,7 @@ $env:PYTHONPATH = "D:\my_projects\multi-agent-rag-system-v2\src"
 python -m pytest -q
 python -m multi_agent_rag --help
 python -m multi_agent_rag plan
+python -m multi_agent_rag ask "How does RAG reduce hallucination?"
 ```
 
 ## Project Layout
@@ -44,5 +46,6 @@ tests/                 Local tests that avoid external services
 ## Development Approach
 
 This project is intentionally built in small commits. Each step should add one clear capability, include focused tests, and keep the project runnable without paid APIs or external databases.
+
 
 
