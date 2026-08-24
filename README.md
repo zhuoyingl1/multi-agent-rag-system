@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 4 adds document ingestion for local files. The project can now load text, Markdown, JSON, CSV, and basic text-based PDF files before chunking, retrieval, and local multi-agent answering.
+Step 5 improves local answer quality and Windows console robustness. The CLI now configures UTF-8 output, and the deterministic agents produce structured answers with evidence and unsupported-claim sections.
 
 ## Implemented Capabilities
 
@@ -19,6 +19,8 @@ Step 4 adds document ingestion for local files. The project can now load text, M
 - Local `ask` command for an end-to-end workflow demo
 - Document ingestion for text, Markdown, JSON, CSV, and basic text-based PDF files
 - Local `ingest` command for document loading and chunking inspection
+- UTF-8 CLI output configuration for PDF text with special characters
+- Structured deterministic answers with evidence and unsupported-claim reporting
 
 ## Planned Capabilities
 
@@ -48,6 +50,7 @@ tests/                 Local tests that avoid external services
 ## Development Approach
 
 This project is intentionally built in small commits. Each step should add one clear capability, include focused tests, and keep the project runnable without paid APIs or external databases.
+
 
 
 

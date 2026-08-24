@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from multi_agent_rag import __version__
@@ -10,6 +11,12 @@ from multi_agent_rag.documents import load_document
 from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.hybrid import HybridRetriever
 from multi_agent_rag.workflow import MultiAgentRAGWorkflow
+
+
+def configure_output() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -80,12 +87,14 @@ def run_ingest(args: argparse.Namespace) -> int:
     return 0
 
 def main(argv: list[str] | None = None) -> int:
+    configure_output()
     parser = build_parser()
     args = parser.parse_args(argv)
     if not hasattr(args, "func"):
         parser.print_help()
         return 0
     return args.func(args)
+
 
 
 
