@@ -4,12 +4,19 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 0 creates the project scaffold only. It verifies that the package can be imported, the CLI can run, and the repository is ready for incremental implementation.
+Step 1 adds core document models and Markdown-aware structured chunking. The project can now convert a source document into stable prose, code, table, and formula chunks.
+
+## Implemented Capabilities
+
+- Python package scaffold with CLI entry point
+- Local test harness with pytest
+- Core `Document` and `Chunk` models
+- Stable document and chunk identifiers
+- Structured chunking for prose, fenced code blocks, Markdown tables, and formula blocks
 
 ## Planned Capabilities
 
 - Document ingestion for local demo documents and uploaded files
-- Structured chunking for prose, code, formulas, and tables
 - Local hybrid retrieval with keyword, vector-like, and entity expansion signals
 - Planner, coordinator, expert, grounding judge, and summarizer agents
 - FastAPI endpoints with Server-Sent Events for inspectable workflow progress
@@ -19,6 +26,7 @@ Step 0 creates the project scaffold only. It verifies that the package can be im
 ## Quick Start
 
 ```powershell
+$env:PYTHONPATH = "D:\my_projects\multi-agent-rag-system-v2\src"
 python -m pytest -q
 python -m multi_agent_rag --help
 python -m multi_agent_rag plan
