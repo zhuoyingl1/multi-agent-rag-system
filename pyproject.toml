@@ -21,6 +21,12 @@ rag-agent = "multi_agent_rag.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0"]
+production = [
+  "langgraph>=0.2.0",
+  "neo4j>=5.0.0",
+  "qdrant-client>=1.9.0",
+  "sentence-transformers>=3.0.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

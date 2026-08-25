@@ -9,6 +9,7 @@ from pathlib import Path
 from multi_agent_rag import __version__
 from multi_agent_rag.documents import load_document
 from multi_agent_rag.evaluation import run_evaluation
+from multi_agent_rag.integrations import check_integrations
 from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.hybrid import HybridRetriever
 from multi_agent_rag.workflow import MultiAgentRAGWorkflow
@@ -47,6 +48,10 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--output", help="Optional path for the JSON evaluation report.")
     eval_parser.set_defaults(func=run_eval)
 
+    integrations_parser = subparsers.add_parser("integrations", help="Show optional production integration readiness.")
+    integrations_parser.add_argument("--json", action="store_true", help="Print the readiness report as JSON.")
+    integrations_parser.set_defaults(func=run_integrations)
+
     return parser
 
 
@@ -58,6 +63,7 @@ def print_plan(_args: argparse.Namespace) -> int:
         "4. Multi-agent workflow and document ingestion",
         "5. API, streaming, metrics, and demo evidence",
         "6. Frontend console and deterministic evaluation runner",
+        "7. Optional production integration readiness path",
     ]
     print("Implementation plan:")
     for stage in stages:
@@ -124,6 +130,23 @@ def run_eval(args: argparse.Namespace) -> int:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(report.to_json() + "\n", encoding="utf-8")
         print(f"JSON report written to {output_path}")
+    return 0
+
+
+def run_integrations(args: argparse.Namespace) -> int:
+    report = check_integrations()
+    if args.json:
+        print(report.to_json())
+        return 0
+
+    print("Integration readiness:")
+    print(f"- mode: {report.mode}")
+    print(f"- ready: {report.ready_count}/{report.integration_count}")
+    for integration in report.integrations:
+        package = integration.required_package or "built-in"
+        print(f"- {integration.name}: {integration.status} package={package}")
+        print(f"  role: {integration.role}")
+        print(f"  notes: {integration.notes}")
     return 0
 
 

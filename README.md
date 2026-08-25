@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 12 adds deterministic fallback behavior for unsupported or low-evidence queries, preventing ungrounded answers when retrieval cannot find enough relevant evidence.
+Step 13 adds optional production integration readiness reporting for LangGraph, Qdrant, Neo4j, and reranking while keeping the default local demo fully runnable.
 
 ## Implemented Capabilities
 
@@ -29,10 +29,11 @@ Step 12 adds deterministic fallback behavior for unsupported or low-evidence que
 - SSE workflow events with progressive answer delta rendering
 - Local evaluation runner with JSON cases and JSON report export
 - Evidence sufficiency gate with grounded fallback responses
+- Optional production integration readiness checks for LangGraph, Qdrant, Neo4j, and reranking
 
 ## Planned Capabilities
 
-- Optional production-style integrations for LangGraph, Qdrant, Neo4j, and reranking
+- Production adapter implementations backed by live external services
 
 ## Quick Start
 
@@ -45,6 +46,7 @@ python -m multi_agent_rag plan
 python -m multi_agent_rag ingest examples/sample_docs.md
 python -m multi_agent_rag ask "How does RAG reduce hallucination?"
 python -m multi_agent_rag eval --output output/eval-report.json
+python -m multi_agent_rag integrations
 python -m uvicorn multi_agent_rag.api.main:app --reload --app-dir src
 ```
 
@@ -62,6 +64,7 @@ npm run dev
 src/multi_agent_rag/   Python package
 examples/              Demo documents and sample inputs
 tests/                 Local tests that avoid external services
+frontend/              Next.js local console
 ```
 
 ## Development Approach
