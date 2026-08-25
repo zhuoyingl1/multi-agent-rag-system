@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 16 improves API and frontend error handling so missing documents, invalid files, and evaluation case errors return clear 400 responses and readable UI messages.
+Step 17 adds request validation for empty query, document, and evaluation fields, with frontend parsing for FastAPI validation errors.
 
 ## Implemented Capabilities
 
@@ -33,6 +33,7 @@ Step 16 improves API and frontend error handling so missing documents, invalid f
 - FastAPI and frontend integration readiness dashboard
 - FastAPI and frontend evaluation dashboard
 - Consistent API error handling for document loading and evaluation failures
+- Request validation for empty query, document, and evaluation inputs
 
 ## Planned Capabilities
 

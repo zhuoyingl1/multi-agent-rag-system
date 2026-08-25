@@ -64,6 +64,17 @@ def test_query_endpoint_returns_bad_request_for_missing_document() -> None:
     assert "Document not found" in response.json()["detail"]
 
 
+def test_query_endpoint_rejects_empty_fields() -> None:
+    client = TestClient(build_app())
+
+    response = client.post("/query", json={"query": "", "document_path": ""})
+
+    assert response.status_code == 422
+    errors = response.json()["detail"]
+    assert len(errors) == 2
+    assert {tuple(error["loc"]) for error in errors} == {("body", "query"), ("body", "document_path")}
+
+
 def test_stream_endpoint_returns_all_events() -> None:
     client = TestClient(build_app())
 
@@ -130,3 +141,12 @@ def test_evaluate_endpoint_returns_bad_request_for_missing_cases() -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Evaluation cases not found: missing-cases.json"
+
+
+def test_evaluate_endpoint_rejects_empty_cases_path() -> None:
+    client = TestClient(build_app())
+
+    response = client.post("/evaluate", json={"cases_path": ""})
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "cases_path"]

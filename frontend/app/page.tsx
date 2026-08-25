@@ -236,8 +236,19 @@ export default function Home() {
 
   async function readErrorMessage(response: Response, fallback: string) {
     try {
-      const payload = (await response.json()) as { detail?: string };
-      return payload.detail || fallback;
+      const payload = (await response.json()) as { detail?: string | Array<{ msg?: string; loc?: Array<string | number> }> };
+      if (typeof payload.detail === "string") {
+        return payload.detail;
+      }
+      if (Array.isArray(payload.detail)) {
+        return payload.detail
+          .map((item) => {
+            const field = item.loc?.slice(1).join(".") || "request";
+            return `${field}: ${item.msg || "Invalid value"}`;
+          })
+          .join("; ");
+      }
+      return fallback;
     } catch {
       return fallback;
     }

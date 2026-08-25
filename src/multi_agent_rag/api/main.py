@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from multi_agent_rag.documents import load_document
 from multi_agent_rag.evaluation import EvalReport, run_evaluation
@@ -30,15 +30,15 @@ STREAM_DELTA_DELAY_SECONDS = 0.02
 class QueryRequest(BaseModel):
     """API request for local document question answering."""
 
-    query: str
-    document_path: str = str(DEFAULT_DOCUMENT_PATH)
+    query: str = Field(min_length=1)
+    document_path: str = Field(default=str(DEFAULT_DOCUMENT_PATH), min_length=1)
 
 
 class EvaluationRequest(BaseModel):
     """API request for deterministic local evaluation."""
 
-    document_path: str = str(DEFAULT_DOCUMENT_PATH)
-    cases_path: str = str(DEFAULT_EVAL_CASES_PATH)
+    document_path: str = Field(default=str(DEFAULT_DOCUMENT_PATH), min_length=1)
+    cases_path: str = Field(default=str(DEFAULT_EVAL_CASES_PATH), min_length=1)
 
 
 def build_app() -> FastAPI:
