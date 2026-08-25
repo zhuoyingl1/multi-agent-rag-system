@@ -43,6 +43,18 @@ def test_query_endpoint_returns_grounded_answer() -> None:
     assert data["metrics"]["retrieved_sources"] >= 1
 
 
+def test_query_endpoint_returns_fallback_for_insufficient_evidence() -> None:
+    client = TestClient(build_app())
+
+    response = client.post("/query", json={"query": "Who won the 1998 world chess championship?"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["sources"] == []
+    assert data["metrics"]["evidence_status"] == "insufficient"
+    assert "No sufficiently relevant retrieved evidence" in data["answer"]
+
+
 def test_stream_endpoint_returns_all_events() -> None:
     client = TestClient(build_app())
 

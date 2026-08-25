@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 11 adds a deterministic evaluation runner for local answer quality, source coverage, grounding, latency, and failed-agent monitoring.
+Step 12 adds deterministic fallback behavior for unsupported or low-evidence queries, preventing ungrounded answers when retrieval cannot find enough relevant evidence.
 
 ## Implemented Capabilities
 
@@ -28,10 +28,10 @@ Step 11 adds a deterministic evaluation runner for local answer quality, source 
 - Next.js console for query, streaming, metrics, and source inspection
 - SSE workflow events with progressive answer delta rendering
 - Local evaluation runner with JSON cases and JSON report export
+- Evidence sufficiency gate with grounded fallback responses
 
 ## Planned Capabilities
 
-- Deterministic fallback behavior for unsupported or low-evidence queries
 - Optional production-style integrations for LangGraph, Qdrant, Neo4j, and reranking
 
 ## Quick Start

@@ -49,7 +49,7 @@ class SummarizerAgent:
 
     def _direct_answer(self, query: str, sources: list[SearchResult]) -> str:
         if not sources:
-            return "No retrieved evidence was available, so the workflow cannot provide a grounded direct answer."
+            return "No sufficiently relevant retrieved evidence was available, so the workflow cannot provide a grounded direct answer."
 
         title = self._best_title(sources)
         matched_terms = self._matched_terms(query, sources)

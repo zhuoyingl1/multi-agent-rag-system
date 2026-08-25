@@ -9,8 +9,38 @@ from multi_agent_rag.agents.experts import ExpertAgent
 from multi_agent_rag.agents.judge import GroundingJudge
 from multi_agent_rag.agents.planner import PlannerAgent
 from multi_agent_rag.agents.summarizer import SummarizerAgent
-from multi_agent_rag.models import AgentResult, WorkflowResult
+from multi_agent_rag.models import AgentResult, SearchResult, WorkflowResult
 from multi_agent_rag.retrieval.hybrid import HybridRetriever
+from multi_agent_rag.retrieval.tokenization import tokenize
+
+EVIDENCE_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "by",
+    "can",
+    "does",
+    "for",
+    "from",
+    "how",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "with",
+}
 
 
 class MultiAgentRAGWorkflow:
@@ -28,6 +58,31 @@ class MultiAgentRAGWorkflow:
         started = perf_counter()
         plan = self.planner.plan(query)
         sources = self.retriever.retrieve(query, top_k=self.top_k)
+        if not self._has_enough_evidence(query, sources):
+            grounding = self.judge.judge([], [])
+            answer = self.summarizer.summarize(query, [], grounding, [])
+            latency_ms = round((perf_counter() - started) * 1000, 2)
+            metrics: dict[str, float | int | str] = {
+                "selected_agents": len(plan.selected_agents),
+                "retrieved_sources": 0,
+                "candidate_sources": len(sources),
+                "completed_agents": 0,
+                "failed_agents": 0,
+                "grounding_score": grounding.score,
+                "latency_ms": latency_ms,
+                "mode": "deterministic_local",
+                "evidence_status": "insufficient",
+            }
+            return WorkflowResult(
+                query=query,
+                answer=answer,
+                plan=plan,
+                agents=[],
+                grounding=grounding,
+                sources=[],
+                metrics=metrics,
+            )
+
         coordination = self.coordinator.coordinate(plan, sources)
 
         agent_results: list[AgentResult] = []
@@ -41,11 +96,13 @@ class MultiAgentRAGWorkflow:
         metrics: dict[str, float | int | str] = {
             "selected_agents": len(plan.selected_agents),
             "retrieved_sources": len(sources),
+            "candidate_sources": len(sources),
             "completed_agents": len([result for result in agent_results if result.error is None]),
             "failed_agents": len([result for result in agent_results if result.error is not None]),
             "grounding_score": grounding.score,
             "latency_ms": latency_ms,
             "mode": "deterministic_local",
+            "evidence_status": "sufficient",
         }
         return WorkflowResult(
             query=query,
@@ -56,3 +113,16 @@ class MultiAgentRAGWorkflow:
             sources=sources,
             metrics=metrics,
         )
+
+    def _has_enough_evidence(self, query: str, sources: list[SearchResult]) -> bool:
+        if not sources:
+            return False
+        query_terms = [term for term in tokenize(query) if term not in EVIDENCE_STOPWORDS]
+        if not query_terms:
+            return False
+
+        source_text = " ".join(source.chunk.text for source in sources).lower()
+        matched_terms = {term for term in query_terms if term in source_text}
+        min_required = 1 if len(set(query_terms)) <= 2 else 2
+        coverage = len(matched_terms) / max(1, len(set(query_terms)))
+        return len(matched_terms) >= min_required and coverage >= 0.2

@@ -36,7 +36,20 @@ def test_workflow_returns_grounded_answer() -> None:
     assert result.grounding.score > 0
     assert "Grounding score" in result.answer
     assert result.metrics["retrieved_sources"] >= 1
+    assert result.metrics["evidence_status"] == "sufficient"
     assert result.metrics["mode"] == "deterministic_local"
+
+
+def test_workflow_uses_fallback_for_insufficient_evidence() -> None:
+    result = build_workflow().run("Who won the 1998 world chess championship?")
+
+    assert result.sources == []
+    assert result.agents == []
+    assert result.grounding.score == 0.0
+    assert result.metrics["retrieved_sources"] == 0
+    assert result.metrics["candidate_sources"] >= 0
+    assert result.metrics["evidence_status"] == "insufficient"
+    assert "No sufficiently relevant retrieved evidence" in result.answer
 
 
 def test_judge_flags_missing_sources() -> None:
