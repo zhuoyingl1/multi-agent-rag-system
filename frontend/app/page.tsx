@@ -34,6 +34,7 @@ export default function Home() {
   const [query, setQuery] = useState("Which resume projects mention RAG, FastAPI, Next.js, LangGraph, Qdrant, or Neo4j?");
   const [documentPath, setDocumentPath] = useState("D:/desktop/resume/6/resume-Zhuoying Li.pdf");
   const [result, setResult] = useState<QueryResponse | null>(null);
+  const [streamedAnswer, setStreamedAnswer] = useState("");
   const [metrics, setMetrics] = useState<HealthMetrics | null>(null);
   const [events, setEvents] = useState<string[]>([]);
   const [mode, setMode] = useState<"query" | "stream">("query");
@@ -41,6 +42,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
 
   const sourceCount = result?.sources.length ?? 0;
+  const displayedAnswer = result?.answer ?? streamedAnswer;
   const groundingScore = useMemo(() => {
     const value = result?.metrics.grounding_score;
     return typeof value === "number" ? value.toFixed(2) : "0.00";
@@ -68,6 +70,7 @@ export default function Home() {
     setError(null);
     setEvents([]);
     setResult(null);
+    setStreamedAnswer("");
 
     try {
       if (mode === "stream") {
@@ -143,8 +146,14 @@ export default function Home() {
     const data = rawEvent.match(/^data: (.+)$/m)?.[1];
     setEvents((current) => [...current, eventName]);
     if (eventName === "final" && data) {
-      setResult(JSON.parse(data) as QueryResponse);
+      const finalPayload = JSON.parse(data) as QueryResponse;
+      setResult(finalPayload);
+      setStreamedAnswer(finalPayload.answer);
       return true;
+    }
+    if (eventName === "answer_delta" && data) {
+      const payload = JSON.parse(data) as { delta: string };
+      setStreamedAnswer((current) => current + payload.delta);
     }
     return false;
   }
@@ -198,8 +207,8 @@ export default function Home() {
           </div>
 
           {error && <div className="errorBox">{error}</div>}
-          {!error && !result && <div className="emptyState">Run a query to inspect the grounded answer.</div>}
-          {result && <pre className="answerText">{result.answer}</pre>}
+          {!error && !displayedAnswer && <div className="emptyState">Run a query to inspect the grounded answer.</div>}
+          {displayedAnswer && <pre className="answerText">{displayedAnswer}</pre>}
         </section>
       </section>
 

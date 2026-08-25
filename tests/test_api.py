@@ -54,7 +54,9 @@ def test_stream_endpoint_returns_all_events() -> None:
     assert "event: retrieval" in body
     assert "event: agents" in body
     assert "event: judge" in body
+    assert "event: answer_delta" in body
     assert "event: final" in body
+    assert body.index("event: answer_delta") < body.index("event: final")
 
 
 def test_metrics_endpoint_updates_after_query() -> None:

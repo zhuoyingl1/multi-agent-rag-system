@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from time import sleep
 from typing import Any
 
 from fastapi import FastAPI
@@ -19,6 +20,8 @@ from multi_agent_rag.retrieval.hybrid import HybridRetriever
 from multi_agent_rag.workflow import MultiAgentRAGWorkflow
 
 DEFAULT_DOCUMENT_PATH = Path("examples/sample_docs.md")
+STREAM_DELTA_CHARS = 120
+STREAM_DELTA_DELAY_SECONDS = 0.02
 
 
 class QueryRequest(BaseModel):
@@ -65,6 +68,9 @@ def build_app() -> FastAPI:
             yield _sse("retrieval", {"count": len(result.sources), "sources": [source_payload(source) for source in result.sources]})
             yield _sse("agents", {"agents": [agent_payload(agent) for agent in result.agents]})
             yield _sse("judge", result.grounding.__dict__)
+            for delta in answer_deltas(result.answer):
+                yield _sse("answer_delta", {"delta": delta})
+                sleep(STREAM_DELTA_DELAY_SECONDS)
             yield _sse("final", workflow_payload(result))
 
         return StreamingResponse(events(), media_type="text/event-stream")
@@ -117,6 +123,21 @@ def source_payload(source: SearchResult) -> dict[str, Any]:
 
 def _sse(event: str, payload: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def answer_deltas(answer: str, max_chars: int = STREAM_DELTA_CHARS) -> list[str]:
+    chunks = []
+    remaining = answer
+    while remaining:
+        if len(remaining) <= max_chars:
+            chunks.append(remaining)
+            break
+        split_at = remaining.rfind(" ", 0, max_chars)
+        if split_at < max_chars // 2:
+            split_at = max_chars
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:].lstrip()
+    return chunks
 
 
 app = build_app()

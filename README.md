@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 8 adds a local Next.js console for querying documents, viewing grounded answers, inspecting sources, checking metrics, and exercising the SSE query endpoint.
+Step 9 adds answer delta streaming on top of workflow-stage SSE events, so the frontend can render streamed answers progressively before the final payload arrives.
 
 ## Implemented Capabilities
 
@@ -25,6 +25,7 @@ Step 8 adds a local Next.js console for querying documents, viewing grounded ans
 - FastAPI application with `/health`, `/health/metrics`, `/query`, and `/query/stream`
 - In-memory metrics registry for local observability
 - Next.js console for query, streaming, metrics, and source inspection
+- SSE workflow events with progressive answer delta rendering
 
 ## Planned Capabilities
 
