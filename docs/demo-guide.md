@@ -7,6 +7,8 @@ This guide summarizes the runnable demo paths and expected outputs for the Multi
 - Structured document ingestion for Markdown, text, JSON, CSV, and extractable PDF files
 - Markdown-aware chunking for prose, code, formulas, and tables
 - Local hybrid retrieval with keyword, vector-like, and entity expansion signals
+- External Qdrant retrieval for production-style vector index persistence
+- Neo4j graph indexing for chunk and entity relationships
 - Deterministic planner, coordinator, specialist, grounding judge, and summarizer agents
 - LangGraph adapter for production-style state graph orchestration
 - Grounded answer formatting with evidence, sources, and unsupported-claim reporting
@@ -21,14 +23,14 @@ From the repository root:
 
 ```powershell
 python -m pip install -e ".[dev]"
-docker compose up -d qdrant
+docker compose up -d qdrant neo4j
 python -m pytest -q
 ```
 
 Expected test result:
 
 ```text
-51 passed
+62 passed
 ```
 
 The exact runtime can vary by machine.
@@ -65,10 +67,10 @@ The local deterministic orchestrator remains available as a test baseline:
 python -m multi_agent_rag ask "How does RAG reduce hallucination?" --orchestrator local
 ```
 
-The default retrieval path uses the external Qdrant service from `docker-compose.yml`. Start it before API, CLI, or frontend queries:
+The default retrieval path uses the external Qdrant service from `docker-compose.yml`. Neo4j is available as the graph relationship service. Start both before API, CLI, or frontend queries:
 
 ```powershell
-docker compose up -d qdrant
+docker compose up -d qdrant neo4j
 ```
 
 Override the Qdrant connection details when using another service:
@@ -84,6 +86,21 @@ The local hybrid retriever remains available as a no-service test baseline:
 
 ```powershell
 python -m multi_agent_rag ask "How does RAG reduce hallucination?" --retrieval-backend local
+```
+
+Index a document into Neo4j and inspect graph-expanded entities:
+
+```powershell
+python -m multi_agent_rag graph examples/sample_docs.md --query "How does Neo4j support RAG?"
+```
+
+Expected graph output shape:
+
+```text
+Document: sample_docs.md
+Chunks indexed: 5
+Related entities:
+- ...
 ```
 
 Expected answer shape:
@@ -151,15 +168,15 @@ Expected local output:
 
 ```text
 mode: local_with_optional_integrations
-ready: 3/5
+ready: 4/5
 local_hybrid_store: ready
 qdrant: ready
-neo4j: missing_config
+neo4j: ready
 bge_reranker: missing_config
 langgraph: ready
 ```
 
-The exact ready count depends on installed packages and environment variables. Qdrant, Neo4j, and reranking remain optional production integrations.
+The exact ready count depends on installed packages and environment variables. Qdrant and Neo4j are configured by default through `docker-compose.yml`; reranking remains an optional production integration.
 
 ## API Demo
 
@@ -173,6 +190,19 @@ Open:
 
 ```text
 http://127.0.0.1:8000/docs
+```
+
+Open Neo4j Browser:
+
+```text
+http://localhost:7474
+```
+
+Default local credentials:
+
+```text
+username: neo4j
+password: password123
 ```
 
 Useful endpoints:
@@ -249,6 +279,7 @@ Demo checks:
 ## Current Limitations
 
 - Local vector retrieval is vector-like lexical scoring, not a learned embedding model.
-- Qdrant, Neo4j, and reranker production adapters are readiness boundaries rather than live service implementations.
+- Qdrant and Neo4j require Docker services for the production-style path.
+- The reranker production adapter remains a readiness boundary rather than a live service implementation.
 - PDF ingestion depends on extractable text and does not perform OCR.
 - The deterministic judge uses lexical overlap and should be replaced or augmented with an LLM judge for production evaluation.

@@ -91,7 +91,8 @@ class QdrantRetriever:
             "metadata": chunk.metadata,
             "session_id": self.session_id,
         }
-        point_id = str(uuid.UUID(hashlib.sha256(chunk.chunk_id.encode("utf-8")).hexdigest()[:32]))
+        point_key = f"{self.session_id}:{chunk.chunk_id}"
+        point_id = str(uuid.UUID(hashlib.sha256(point_key.encode("utf-8")).hexdigest()[:32]))
         vector = hashed_embedding(chunk.text, size=self.vector_size)
         if self._client_injected:
             return {"id": point_id, "vector": vector, "payload": payload}

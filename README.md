@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 21 makes an external Qdrant server the default retrieval path, with local hybrid retrieval retained as a no-service test fallback.
+Step 22 adds an external Neo4j graph adapter for chunk/entity relationships alongside the default LangGraph and Qdrant runtime.
 
 ## Implemented Capabilities
 
@@ -38,6 +38,7 @@ Step 21 makes an external Qdrant server the default retrieval path, with local h
 - LangGraph workflow adapter with CLI and API orchestration support
 - Internal workflow trace metadata for orchestration mode, evidence status, agents, and retrieved sources
 - Qdrant retrieval adapter and retrieval backend factory for production vector search
+- Neo4j graph adapter for document chunk and entity relationship indexing
 
 ## Planned Capabilities
 

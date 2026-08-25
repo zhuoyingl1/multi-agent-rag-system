@@ -14,9 +14,9 @@ class IntegrationConfig:
 
     qdrant_url: str | None = "http://localhost:6333"
     qdrant_collection: str | None = "documents"
-    neo4j_uri: str | None = None
-    neo4j_user: str | None = None
-    neo4j_database: str | None = None
+    neo4j_uri: str | None = "bolt://localhost:7687"
+    neo4j_user: str | None = "neo4j"
+    neo4j_database: str | None = "neo4j"
     reranker_model: str | None = None
 
     @classmethod
@@ -24,9 +24,9 @@ class IntegrationConfig:
         return cls(
             qdrant_url=os.getenv("QDRANT_URL") or "http://localhost:6333",
             qdrant_collection=os.getenv("QDRANT_COLLECTION") or "documents",
-            neo4j_uri=os.getenv("NEO4J_URI"),
-            neo4j_user=os.getenv("NEO4J_USER"),
-            neo4j_database=os.getenv("NEO4J_DATABASE"),
+            neo4j_uri=os.getenv("NEO4J_URI") or "bolt://localhost:7687",
+            neo4j_user=os.getenv("NEO4J_USER") or "neo4j",
+            neo4j_database=os.getenv("NEO4J_DATABASE") or "neo4j",
             reranker_model=os.getenv("RERANKER_MODEL"),
         )
 

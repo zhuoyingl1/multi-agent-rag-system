@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from multi_agent_rag.integrations import check_integrations
 from multi_agent_rag.orchestration import create_workflow
 from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.factory import create_retriever
+from multi_agent_rag.retrieval.neo4j_adapter import Neo4jGraphAdapter
 
 
 def configure_output() -> None:
@@ -55,6 +57,11 @@ def build_parser() -> argparse.ArgumentParser:
     integrations_parser = subparsers.add_parser("integrations", help="Show optional production integration readiness.")
     integrations_parser.add_argument("--json", action="store_true", help="Print the readiness report as JSON.")
     integrations_parser.set_defaults(func=run_integrations)
+
+    graph_parser = subparsers.add_parser("graph", help="Index a document into Neo4j and inspect related entities.")
+    graph_parser.add_argument("document", help="Path to a local supported document.")
+    graph_parser.add_argument("--query", default="How does RAG use Neo4j?", help="Query text for entity expansion.")
+    graph_parser.set_defaults(func=run_graph)
 
     return parser
 
@@ -161,6 +168,32 @@ def run_integrations(args: argparse.Namespace) -> int:
         print(f"- {integration.name}: {integration.status} package={package}")
         print(f"  role: {integration.role}")
         print(f"  notes: {integration.notes}")
+    return 0
+
+
+def run_graph(args: argparse.Namespace) -> int:
+    document = load_document(Path(args.document))
+    chunks = chunk_document(document)
+    graph = Neo4jGraphAdapter(
+        uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+        user=os.getenv("NEO4J_USER", "neo4j"),
+        password=os.getenv("NEO4J_PASSWORD", "password123"),
+        database=os.getenv("NEO4J_DATABASE", "neo4j"),
+    )
+    try:
+        graph.index(chunks)
+        related = graph.expand_entities(args.query)
+    finally:
+        graph.close()
+
+    print(f"Document: {document.title}")
+    print(f"Chunks indexed: {len(chunks)}")
+    print("Related entities:")
+    if related:
+        for entity in related:
+            print(f"- {entity}")
+    else:
+        print("- none")
     return 0
 
 

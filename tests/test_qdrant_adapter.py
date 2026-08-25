@@ -58,3 +58,17 @@ def test_qdrant_retriever_indexes_and_retrieves_chunks() -> None:
     assert results[0].retrieval_type is RetrievalType.VECTOR
     assert "retrieved" in results[0].highlights
     assert "evidence" in results[0].chunk.text.lower()
+
+
+def test_qdrant_point_ids_are_session_scoped() -> None:
+    client = FakeQdrantClient()
+    chunks = chunk_document(Document(title="rag.md", text="RAG reduces hallucination with retrieved evidence."))
+    first = QdrantRetriever(url="http://localhost:6333", collection="documents", session_id="first", client=client)
+    second = QdrantRetriever(url="http://localhost:6333", collection="documents", session_id="second", client=client)
+
+    first.index(chunks)
+    second.index(chunks)
+
+    point_ids = [point["id"] for point in client.points]
+    assert len(point_ids) == 2
+    assert len(set(point_ids)) == 2
