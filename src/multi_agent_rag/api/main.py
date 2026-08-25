@@ -7,13 +7,13 @@ from pathlib import Path
 from time import sleep
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from multi_agent_rag.documents import load_document
-from multi_agent_rag.evaluation import run_evaluation
+from multi_agent_rag.evaluation import EvalReport, run_evaluation
 from multi_agent_rag.integrations import check_integrations
 from multi_agent_rag.models import AgentResult, SearchResult, WorkflowResult
 from multi_agent_rag.observability import metrics_registry
@@ -70,19 +70,20 @@ def build_app() -> FastAPI:
 
     @app.post("/evaluate")
     def evaluate(request: EvaluationRequest) -> dict[str, Any]:
-        return run_evaluation(Path(request.document_path), Path(request.cases_path)).to_dict()
+        return safe_run_evaluation(Path(request.document_path), Path(request.cases_path)).to_dict()
 
     @app.post("/query")
     def query(request: QueryRequest) -> dict[str, Any]:
-        result = run_query(request.query, Path(request.document_path))
+        result = safe_run_query(request.query, Path(request.document_path))
         metrics_registry.record_run(result.metrics)
         return workflow_payload(result)
 
     @app.post("/query/stream")
     def query_stream(request: QueryRequest) -> StreamingResponse:
+        result = safe_run_query(request.query, Path(request.document_path))
+        metrics_registry.record_run(result.metrics)
+
         def events():
-            result = run_query(request.query, Path(request.document_path))
-            metrics_registry.record_run(result.metrics)
             yield _sse("planning", {"selected_agents": result.plan.selected_agents, "tasks": result.plan.tasks})
             yield _sse("retrieval", {"count": len(result.sources), "sources": [source_payload(source) for source in result.sources]})
             yield _sse("agents", {"agents": [agent_payload(agent) for agent in result.agents]})
@@ -102,6 +103,22 @@ def run_query(query: str, document_path: Path) -> WorkflowResult:
     retriever = HybridRetriever()
     retriever.index(chunk_document(document))
     return MultiAgentRAGWorkflow(retriever).run(query)
+
+
+def safe_run_query(query: str, document_path: Path) -> WorkflowResult:
+    try:
+        return run_query(query, document_path)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def safe_run_evaluation(document_path: Path, cases_path: Path) -> EvalReport:
+    if not cases_path.exists():
+        raise HTTPException(status_code=400, detail=f"Evaluation cases not found: {cases_path}")
+    try:
+        return run_evaluation(document_path, cases_path)
+    except (FileNotFoundError, ValueError, RuntimeError, KeyError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def workflow_payload(result: WorkflowResult) -> dict[str, Any]:

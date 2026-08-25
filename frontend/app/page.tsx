@@ -70,10 +70,12 @@ type EvalReport = {
 };
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
+const defaultQuery = "";
+const defaultDocumentPath = "";
 
 export default function Home() {
-  const [query, setQuery] = useState("Which resume projects mention RAG, FastAPI, Next.js, LangGraph, Qdrant, or Neo4j?");
-  const [documentPath, setDocumentPath] = useState("D:/desktop/resume/6/resume-Zhuoying Li.pdf");
+  const [query, setQuery] = useState(defaultQuery);
+  const [documentPath, setDocumentPath] = useState(defaultDocumentPath);
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [streamedAnswer, setStreamedAnswer] = useState("");
   const [metrics, setMetrics] = useState<HealthMetrics | null>(null);
@@ -137,7 +139,7 @@ export default function Home() {
         body: JSON.stringify({}),
       });
       if (!response.ok) {
-        throw new Error(`Evaluation request failed with ${response.status}`);
+        throw new Error(await readErrorMessage(response, `Evaluation request failed with ${response.status}`));
       }
       setEvaluation((await response.json()) as EvalReport);
     } catch (caught) {
@@ -172,6 +174,14 @@ export default function Home() {
     }
   }
 
+  function updateQuery(value: string) {
+    setQuery(value);
+  }
+
+  function updateDocumentPath(value: string) {
+    setDocumentPath(value);
+  }
+
   async function runStandardQuery() {
     const response = await fetch(`${apiBaseUrl}/query`, {
       method: "POST",
@@ -181,7 +191,7 @@ export default function Home() {
       body: JSON.stringify({ query, document_path: documentPath }),
     });
     if (!response.ok) {
-      throw new Error(`Query request failed with ${response.status}`);
+      throw new Error(await readErrorMessage(response, `Query request failed with ${response.status}`));
     }
     setResult((await response.json()) as QueryResponse);
   }
@@ -195,7 +205,7 @@ export default function Home() {
       body: JSON.stringify({ query, document_path: documentPath }),
     });
     if (!response.ok || !response.body) {
-      throw new Error(`Stream request failed with ${response.status}`);
+      throw new Error(await readErrorMessage(response, `Stream request failed with ${response.status}`));
     }
 
     const reader = response.body.getReader();
@@ -222,6 +232,15 @@ export default function Home() {
       }
     }
     return completed;
+  }
+
+  async function readErrorMessage(response: Response, fallback: string) {
+    try {
+      const payload = (await response.json()) as { detail?: string };
+      return payload.detail || fallback;
+    } catch {
+      return fallback;
+    }
   }
 
   function handleStreamEvent(rawEvent: string) {
@@ -261,10 +280,10 @@ export default function Home() {
           </div>
 
           <label htmlFor="documentPath">Document path</label>
-          <input id="documentPath" value={documentPath} onChange={(event) => setDocumentPath(event.target.value)} />
+          <input id="documentPath" value={documentPath} onChange={(event) => updateDocumentPath(event.target.value)} />
 
           <label htmlFor="query">Question</label>
-          <textarea id="query" value={query} onChange={(event) => setQuery(event.target.value)} rows={7} />
+          <textarea id="query" value={query} onChange={(event) => updateQuery(event.target.value)} rows={7} />
 
           <div className="modeSwitch" aria-label="Query mode">
             <button type="button" className={mode === "query" ? "active" : ""} onClick={() => setMode("query")}>

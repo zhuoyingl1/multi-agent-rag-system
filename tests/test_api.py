@@ -55,6 +55,15 @@ def test_query_endpoint_returns_fallback_for_insufficient_evidence() -> None:
     assert "No sufficiently relevant retrieved evidence" in data["answer"]
 
 
+def test_query_endpoint_returns_bad_request_for_missing_document() -> None:
+    client = TestClient(build_app())
+
+    response = client.post("/query", json={"query": "What is this?", "document_path": "missing.md"})
+
+    assert response.status_code == 400
+    assert "Document not found" in response.json()["detail"]
+
+
 def test_stream_endpoint_returns_all_events() -> None:
     client = TestClient(build_app())
 
@@ -69,6 +78,15 @@ def test_stream_endpoint_returns_all_events() -> None:
     assert "event: answer_delta" in body
     assert "event: final" in body
     assert body.index("event: answer_delta") < body.index("event: final")
+
+
+def test_stream_endpoint_returns_bad_request_for_missing_document() -> None:
+    client = TestClient(build_app())
+
+    response = client.post("/query/stream", json={"query": "What is this?", "document_path": "missing.md"})
+
+    assert response.status_code == 400
+    assert "Document not found" in response.json()["detail"]
 
 
 def test_metrics_endpoint_updates_after_query() -> None:
@@ -103,3 +121,12 @@ def test_evaluate_endpoint_returns_report() -> None:
     assert data["case_count"] == 3
     assert data["passed_count"] == 3
     assert data["failed_count"] == 0
+
+
+def test_evaluate_endpoint_returns_bad_request_for_missing_cases() -> None:
+    client = TestClient(build_app())
+
+    response = client.post("/evaluate", json={"cases_path": "missing-cases.json"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Evaluation cases not found: missing-cases.json"

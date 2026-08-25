@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 15 exposes deterministic evaluation through the FastAPI API and Next.js console, so the demo can show pass rate, grounding, latency, and case-level results from the browser.
+Step 16 improves API and frontend error handling so missing documents, invalid files, and evaluation case errors return clear 400 responses and readable UI messages.
 
 ## Implemented Capabilities
 
@@ -32,6 +32,7 @@ Step 15 exposes deterministic evaluation through the FastAPI API and Next.js con
 - Optional production integration readiness checks for LangGraph, Qdrant, Neo4j, and reranking
 - FastAPI and frontend integration readiness dashboard
 - FastAPI and frontend evaluation dashboard
+- Consistent API error handling for document loading and evaluation failures
 
 ## Planned Capabilities
 
