@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, Bot, Database, FileText, Loader2, Network, Play, Radio, RefreshCw, Send } from "lucide-react";
+import { Activity, BarChart3, Bot, Database, FileText, Loader2, Network, Play, Radio, RefreshCw, Send } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type Source = {
@@ -45,6 +45,30 @@ type IntegrationReport = {
   integrations: IntegrationStatus[];
 };
 
+type EvalCaseResult = {
+  case_id: string;
+  query: string;
+  passed: boolean;
+  grounding_score: number;
+  retrieved_sources: number;
+  latency_ms: number;
+  failed_agents: number;
+  missing_expected_terms: string[];
+  missing_source_terms: string[];
+};
+
+type EvalReport = {
+  case_count: number;
+  passed_count: number;
+  failed_count: number;
+  pass_rate: number;
+  average_grounding_score: number;
+  average_latency_ms: number;
+  average_retrieved_sources: number;
+  total_failed_agents: number;
+  cases: EvalCaseResult[];
+};
+
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
 export default function Home() {
@@ -54,10 +78,13 @@ export default function Home() {
   const [streamedAnswer, setStreamedAnswer] = useState("");
   const [metrics, setMetrics] = useState<HealthMetrics | null>(null);
   const [integrations, setIntegrations] = useState<IntegrationReport | null>(null);
+  const [evaluation, setEvaluation] = useState<EvalReport | null>(null);
   const [events, setEvents] = useState<string[]>([]);
   const [mode, setMode] = useState<"query" | "stream">("query");
   const [loading, setLoading] = useState(false);
+  const [evaluating, setEvaluating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [evaluationError, setEvaluationError] = useState<string | null>(null);
 
   const sourceCount = result?.sources.length ?? 0;
   const displayedAnswer = result?.answer ?? streamedAnswer;
@@ -95,6 +122,28 @@ export default function Home() {
       setIntegrations((await response.json()) as IntegrationReport);
     } catch {
       setIntegrations(null);
+    }
+  }
+
+  async function runEvaluation() {
+    setEvaluating(true);
+    setEvaluationError(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/evaluate`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({}),
+      });
+      if (!response.ok) {
+        throw new Error(`Evaluation request failed with ${response.status}`);
+      }
+      setEvaluation((await response.json()) as EvalReport);
+    } catch (caught) {
+      setEvaluationError(caught instanceof Error ? caught.message : "Evaluation failed");
+    } finally {
+      setEvaluating(false);
     }
   }
 
@@ -310,6 +359,47 @@ export default function Home() {
               </article>
             ))}
           </div>
+        </div>
+
+        <div className="evaluationPanel">
+          <div className="sectionHeader">
+            <BarChart3 size={18} />
+            <h2>Evaluation</h2>
+          </div>
+          <div className="evaluationHeader">
+            <div>
+              <span>Default regression set</span>
+              <strong>{evaluation ? `${evaluation.passed_count}/${evaluation.case_count} passed` : "Not run"}</strong>
+            </div>
+            <button className="secondaryButton" type="button" onClick={runEvaluation} disabled={evaluating}>
+              {evaluating ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
+              Run Eval
+            </button>
+          </div>
+          {evaluationError && <div className="compactError">{evaluationError}</div>}
+          {evaluation && (
+            <>
+              <div className="evalMetrics">
+                <Metric label="Pass rate" value={`${Math.round(evaluation.pass_rate * 100)}%`} />
+                <Metric label="Avg grounding" value={evaluation.average_grounding_score.toFixed(2)} />
+                <Metric label="Avg latency" value={`${evaluation.average_latency_ms.toFixed(2)} ms`} />
+                <Metric label="Failed agents" value={evaluation.total_failed_agents.toString()} />
+              </div>
+              <div className="caseList">
+                {evaluation.cases.map((item) => (
+                  <article className="caseItem" key={item.case_id}>
+                    <div>
+                      <strong>{item.case_id}</strong>
+                      <span>{item.query}</span>
+                    </div>
+                    <span className={`statusPill ${item.passed ? "ready" : "missing_config"}`}>
+                      {item.passed ? "PASS" : "FAIL"}
+                    </span>
+                  </article>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </section>
     </main>

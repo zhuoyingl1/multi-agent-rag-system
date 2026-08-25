@@ -82,7 +82,8 @@ h2 {
 .answerPanel,
 .sourcePanel,
 .eventPanel,
-.integrationPanel {
+.integrationPanel,
+.evaluationPanel {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -279,7 +280,8 @@ textarea:focus {
 
 .sourcePanel,
 .eventPanel,
-.integrationPanel {
+.integrationPanel,
+.evaluationPanel {
   padding: 18px;
 }
 
@@ -335,6 +337,10 @@ textarea:focus {
 }
 
 .integrationPanel {
+  grid-column: 1 / -1;
+}
+
+.evaluationPanel {
   grid-column: 1 / -1;
 }
 
@@ -413,6 +419,102 @@ textarea:focus {
   color: var(--accent);
 }
 
+.evaluationHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 64px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.evaluationHeader span,
+.evaluationHeader strong {
+  display: block;
+}
+
+.evaluationHeader span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.evaluationHeader strong {
+  margin-top: 4px;
+  color: var(--brand-dark);
+  font-size: 20px;
+}
+
+.secondaryButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 124px;
+  min-height: 40px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--brand);
+  color: #ffffff;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.secondaryButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.compactError {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fff6f5;
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.evalMetrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.caseList {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.caseItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 72px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+}
+
+.caseItem strong,
+.caseItem span {
+  display: block;
+}
+
+.caseItem div span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -430,6 +532,10 @@ textarea:focus {
   }
 
   .integrationList {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .evalMetrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -453,5 +559,15 @@ textarea:focus {
 
   .integrationList {
     grid-template-columns: 1fr;
+  }
+
+  .evalMetrics {
+    grid-template-columns: 1fr;
+  }
+
+  .evaluationHeader,
+  .caseItem {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

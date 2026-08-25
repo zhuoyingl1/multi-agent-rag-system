@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from multi_agent_rag.documents import load_document
+from multi_agent_rag.evaluation import run_evaluation
 from multi_agent_rag.integrations import check_integrations
 from multi_agent_rag.models import AgentResult, SearchResult, WorkflowResult
 from multi_agent_rag.observability import metrics_registry
@@ -21,6 +22,7 @@ from multi_agent_rag.retrieval.hybrid import HybridRetriever
 from multi_agent_rag.workflow import MultiAgentRAGWorkflow
 
 DEFAULT_DOCUMENT_PATH = Path("examples/sample_docs.md")
+DEFAULT_EVAL_CASES_PATH = Path("examples/eval_cases.json")
 STREAM_DELTA_CHARS = 120
 STREAM_DELTA_DELAY_SECONDS = 0.02
 
@@ -30,6 +32,13 @@ class QueryRequest(BaseModel):
 
     query: str
     document_path: str = str(DEFAULT_DOCUMENT_PATH)
+
+
+class EvaluationRequest(BaseModel):
+    """API request for deterministic local evaluation."""
+
+    document_path: str = str(DEFAULT_DOCUMENT_PATH)
+    cases_path: str = str(DEFAULT_EVAL_CASES_PATH)
 
 
 def build_app() -> FastAPI:
@@ -48,6 +57,7 @@ def build_app() -> FastAPI:
             "status": "healthy",
             "mode": "deterministic_local",
             "default_document": str(DEFAULT_DOCUMENT_PATH),
+            "default_eval_cases": str(DEFAULT_EVAL_CASES_PATH),
         }
 
     @app.get("/health/metrics")
@@ -57,6 +67,10 @@ def build_app() -> FastAPI:
     @app.get("/health/integrations")
     def health_integrations() -> dict[str, Any]:
         return check_integrations().to_dict()
+
+    @app.post("/evaluate")
+    def evaluate(request: EvaluationRequest) -> dict[str, Any]:
+        return run_evaluation(Path(request.document_path), Path(request.cases_path)).to_dict()
 
     @app.post("/query")
     def query(request: QueryRequest) -> dict[str, Any]:

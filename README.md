@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 14 exposes integration readiness through the FastAPI health surface and the Next.js console, making local and optional production paths visible in the demo UI.
+Step 15 exposes deterministic evaluation through the FastAPI API and Next.js console, so the demo can show pass rate, grounding, latency, and case-level results from the browser.
 
 ## Implemented Capabilities
 
@@ -31,6 +31,7 @@ Step 14 exposes integration readiness through the FastAPI health surface and the
 - Evidence sufficiency gate with grounded fallback responses
 - Optional production integration readiness checks for LangGraph, Qdrant, Neo4j, and reranking
 - FastAPI and frontend integration readiness dashboard
+- FastAPI and frontend evaluation dashboard
 
 ## Planned Capabilities
 
