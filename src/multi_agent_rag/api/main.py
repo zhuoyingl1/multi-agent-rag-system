@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from multi_agent_rag.documents import load_document
+from multi_agent_rag.integrations import check_integrations
 from multi_agent_rag.models import AgentResult, SearchResult, WorkflowResult
 from multi_agent_rag.observability import metrics_registry
 from multi_agent_rag.retrieval.chunking import chunk_document
@@ -52,6 +53,10 @@ def build_app() -> FastAPI:
     @app.get("/health/metrics")
     def health_metrics() -> dict[str, Any]:
         return metrics_registry.snapshot()
+
+    @app.get("/health/integrations")
+    def health_integrations() -> dict[str, Any]:
+        return check_integrations().to_dict()
 
     @app.post("/query")
     def query(request: QueryRequest) -> dict[str, Any]:

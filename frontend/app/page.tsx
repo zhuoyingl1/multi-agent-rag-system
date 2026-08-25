@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, Bot, Database, FileText, Loader2, Play, Radio, RefreshCw, Send } from "lucide-react";
+import { Activity, Bot, Database, FileText, Loader2, Network, Play, Radio, RefreshCw, Send } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type Source = {
@@ -28,6 +28,23 @@ type HealthMetrics = {
   total_failed_agents: number;
 };
 
+type IntegrationStatus = {
+  name: string;
+  role: string;
+  status: string;
+  required_package: string | null;
+  configured: boolean;
+  package_available: boolean;
+  notes: string;
+};
+
+type IntegrationReport = {
+  mode: string;
+  ready_count: number;
+  integration_count: number;
+  integrations: IntegrationStatus[];
+};
+
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
 export default function Home() {
@@ -36,6 +53,7 @@ export default function Home() {
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [streamedAnswer, setStreamedAnswer] = useState("");
   const [metrics, setMetrics] = useState<HealthMetrics | null>(null);
+  const [integrations, setIntegrations] = useState<IntegrationReport | null>(null);
   const [events, setEvents] = useState<string[]>([]);
   const [mode, setMode] = useState<"query" | "stream">("query");
   const [loading, setLoading] = useState(false);
@@ -49,8 +67,12 @@ export default function Home() {
   }, [result]);
 
   useEffect(() => {
-    void refreshMetrics();
+    void refreshDashboard();
   }, []);
+
+  async function refreshDashboard() {
+    await Promise.all([refreshMetrics(), refreshIntegrations()]);
+  }
 
   async function refreshMetrics() {
     try {
@@ -61,6 +83,18 @@ export default function Home() {
       setMetrics((await response.json()) as HealthMetrics);
     } catch {
       setMetrics(null);
+    }
+  }
+
+  async function refreshIntegrations() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/health/integrations`);
+      if (!response.ok) {
+        throw new Error(`Integrations request failed with ${response.status}`);
+      }
+      setIntegrations((await response.json()) as IntegrationReport);
+    } catch {
+      setIntegrations(null);
     }
   }
 
@@ -81,7 +115,7 @@ export default function Home() {
       } else {
         await runStandardQuery();
       }
-      await refreshMetrics();
+      await refreshDashboard();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Request failed");
     } finally {
@@ -165,7 +199,7 @@ export default function Home() {
           <p className="eyebrow">Local RAG Console</p>
           <h1>Multi-Agent Research Workflow</h1>
         </div>
-        <button className="iconButton" type="button" onClick={refreshMetrics} aria-label="Refresh metrics">
+        <button className="iconButton" type="button" onClick={refreshDashboard} aria-label="Refresh dashboard">
           <RefreshCw size={18} />
         </button>
       </section>
@@ -251,6 +285,30 @@ export default function Home() {
           </div>
           <div className="events">
             {events.length === 0 ? <span>No stream events yet.</span> : events.map((event, index) => <span key={`${event}-${index}`}>{event}</span>)}
+          </div>
+        </div>
+
+        <div className="integrationPanel">
+          <div className="sectionHeader">
+            <Network size={18} />
+            <h2>Integrations</h2>
+          </div>
+          <div className="integrationSummary">
+            <span>{integrations?.mode ?? "unavailable"}</span>
+            <strong>
+              {integrations ? `${integrations.ready_count}/${integrations.integration_count} ready` : "0/0 ready"}
+            </strong>
+          </div>
+          <div className="integrationList">
+            {(integrations?.integrations ?? []).map((item) => (
+              <article className="integrationItem" key={item.name}>
+                <div>
+                  <strong>{item.name}</strong>
+                  <span>{item.required_package ?? "built-in"}</span>
+                </div>
+                <span className={`statusPill ${item.status}`}>{item.status}</span>
+              </article>
+            ))}
           </div>
         </div>
       </section>

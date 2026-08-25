@@ -79,3 +79,15 @@ def test_metrics_endpoint_updates_after_query() -> None:
 
     assert response.status_code == 200
     assert response.json()["run_count"] >= 1
+
+
+def test_integrations_endpoint_returns_readiness() -> None:
+    client = TestClient(build_app())
+
+    response = client.get("/health/integrations")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["integration_count"] == 5
+    assert data["integrations"][0]["name"] == "local_hybrid_store"
+    assert data["integrations"][0]["status"] == "ready"

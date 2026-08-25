@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 13 adds optional production integration readiness reporting for LangGraph, Qdrant, Neo4j, and reranking while keeping the default local demo fully runnable.
+Step 14 exposes integration readiness through the FastAPI health surface and the Next.js console, making local and optional production paths visible in the demo UI.
 
 ## Implemented Capabilities
 
@@ -30,6 +30,7 @@ Step 13 adds optional production integration readiness reporting for LangGraph, 
 - Local evaluation runner with JSON cases and JSON report export
 - Evidence sufficiency gate with grounded fallback responses
 - Optional production integration readiness checks for LangGraph, Qdrant, Neo4j, and reranking
+- FastAPI and frontend integration readiness dashboard
 
 ## Planned Capabilities
 
