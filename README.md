@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 19 adds an optional LangGraph orchestration adapter while keeping the deterministic local workflow as the default runtime.
+Step 20 makes LangGraph the default orchestration path when available, with a deterministic local fallback for tests and constrained environments.
 
 ## Implemented Capabilities
 
@@ -29,13 +29,14 @@ Step 19 adds an optional LangGraph orchestration adapter while keeping the deter
 - SSE workflow events with progressive answer delta rendering
 - Local evaluation runner with JSON cases and JSON report export
 - Evidence sufficiency gate with grounded fallback responses
-- Optional production integration readiness checks for LangGraph, Qdrant, Neo4j, and reranking
+- Production integration readiness checks for LangGraph, Qdrant, Neo4j, and reranking
 - FastAPI and frontend integration readiness dashboard
 - FastAPI and frontend evaluation dashboard
 - Consistent API error handling for document loading and evaluation failures
 - Request validation for empty query, document, and evaluation inputs
 - Document upload API and frontend upload workflow
-- Optional LangGraph workflow adapter with CLI, API, and frontend orchestration selection
+- LangGraph workflow adapter with CLI and API orchestration support
+- Internal workflow trace metadata for orchestration mode, evidence status, agents, and retrieved sources
 
 ## Planned Capabilities
 

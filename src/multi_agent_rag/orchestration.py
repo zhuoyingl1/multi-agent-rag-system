@@ -23,8 +23,7 @@ def create_workflow(retriever: HybridRetriever, top_k: int = 5, orchestrator: st
     if selected not in {"auto", "local", "langgraph"}:
         raise ValueError("Workflow orchestrator must be one of: auto, local, langgraph")
 
-    langgraph_enabled = os.getenv("ENABLE_LANGGRAPH", "").lower() in {"1", "true", "yes"}
-    should_use_langgraph = selected == "langgraph" or (selected == "auto" and langgraph_enabled)
+    should_use_langgraph = selected == "langgraph" or (selected == "auto" and _langgraph_available())
     if should_use_langgraph:
         if _langgraph_available():
             from multi_agent_rag.langgraph_workflow import LangGraphRAGWorkflow

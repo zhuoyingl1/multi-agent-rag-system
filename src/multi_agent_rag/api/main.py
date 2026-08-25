@@ -170,11 +170,23 @@ def workflow_payload(result: WorkflowResult) -> dict[str, Any]:
     return {
         "query": result.query,
         "answer": result.answer,
+        "workflow_trace": workflow_trace_payload(result),
         "plan": result.plan.__dict__,
         "agents": [agent_payload(agent) for agent in result.agents],
         "grounding": result.grounding.__dict__,
         "sources": [source_payload(source) for source in result.sources],
         "metrics": result.metrics,
+    }
+
+
+def workflow_trace_payload(result: WorkflowResult) -> dict[str, Any]:
+    return {
+        "mode": result.metrics.get("mode", "unknown"),
+        "evidence_status": result.metrics.get("evidence_status", "unknown"),
+        "selected_agents": result.plan.selected_agents,
+        "retrieved_sources": result.metrics.get("retrieved_sources", len(result.sources)),
+        "completed_agents": result.metrics.get("completed_agents", len(result.agents)),
+        "failed_agents": result.metrics.get("failed_agents", 0),
     }
 
 

@@ -18,7 +18,6 @@ class IntegrationConfig:
     neo4j_user: str | None = None
     neo4j_database: str | None = None
     reranker_model: str | None = None
-    enable_langgraph: bool = False
 
     @classmethod
     def from_env(cls) -> "IntegrationConfig":
@@ -29,7 +28,6 @@ class IntegrationConfig:
             neo4j_user=os.getenv("NEO4J_USER"),
             neo4j_database=os.getenv("NEO4J_DATABASE"),
             reranker_model=os.getenv("RERANKER_MODEL"),
-            enable_langgraph=os.getenv("ENABLE_LANGGRAPH", "").lower() in {"1", "true", "yes"},
         )
 
 
@@ -99,8 +97,8 @@ def check_integrations(config: IntegrationConfig | None = None) -> IntegrationRe
             name="langgraph",
             role="Production multi-agent orchestration graph",
             required_package="langgraph",
-            configured=current.enable_langgraph,
-            config_note="Set ENABLE_LANGGRAPH=true to enable this path.",
+            configured=True,
+            config_note="Install the base project dependencies to enable this path.",
         ),
     ]
     ready_count = len([status for status in statuses if status.status == "ready"])
@@ -117,7 +115,7 @@ def _status(name: str, role: str, required_package: str, configured: bool, confi
     package_available = importlib.util.find_spec(required_package) is not None
     if configured and package_available:
         status = "ready"
-        notes = "Configuration and optional package are available."
+        notes = "Configuration and package are available."
     elif configured:
         status = "missing_package"
         notes = f"Install the production extra or package '{required_package}'."

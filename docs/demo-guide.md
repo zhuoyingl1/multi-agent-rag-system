@@ -8,7 +8,7 @@ This guide summarizes the runnable demo paths and expected outputs for the Multi
 - Markdown-aware chunking for prose, code, formulas, and tables
 - Local hybrid retrieval with keyword, vector-like, and entity expansion signals
 - Deterministic planner, coordinator, specialist, grounding judge, and summarizer agents
-- Optional LangGraph adapter for production-style state graph orchestration
+- LangGraph adapter for production-style state graph orchestration
 - Grounded answer formatting with evidence, sources, and unsupported-claim reporting
 - Evidence sufficiency fallback for unsupported or low-evidence queries
 - FastAPI query, streaming, health, metrics, integration readiness, and evaluation endpoints
@@ -27,7 +27,7 @@ python -m pytest -q
 Expected test result:
 
 ```text
-40 passed
+51 passed
 ```
 
 The exact runtime can vary by machine.
@@ -52,18 +52,16 @@ Ask a grounded question:
 python -m multi_agent_rag ask "How does RAG reduce hallucination?"
 ```
 
-Force the default local orchestrator explicitly:
+The default API and frontend path uses LangGraph when the package is available. Force LangGraph from the CLI:
+
+```powershell
+python -m multi_agent_rag ask "How does RAG reduce hallucination?" --orchestrator langgraph
+```
+
+The local deterministic orchestrator remains available as a test baseline:
 
 ```powershell
 python -m multi_agent_rag ask "How does RAG reduce hallucination?" --orchestrator local
-```
-
-Use the optional LangGraph adapter after installing production dependencies and setting configuration:
-
-```powershell
-python -m pip install -e ".[production]"
-$env:ENABLE_LANGGRAPH = "true"
-python -m multi_agent_rag ask "How does RAG reduce hallucination?" --orchestrator langgraph
 ```
 
 Expected answer shape:
@@ -81,6 +79,8 @@ Grounding score: 1.0
 Unsupported claims: None
 Sources: sample_docs.md
 ```
+
+API responses expose workflow trace metadata for debugging and verification. The frontend keeps the query experience simple and uses the default orchestration path.
 
 Ask an unsupported question:
 
@@ -129,15 +129,15 @@ Expected local output:
 
 ```text
 mode: local_with_optional_integrations
-ready: 1/5
+ready: 2/5
 local_hybrid_store: ready
 qdrant: missing_config
 neo4j: missing_config
 bge_reranker: missing_config
-langgraph: missing_config
+langgraph: ready
 ```
 
-This is expected without live external services. The default local demo remains fully runnable.
+The exact ready count depends on installed packages and environment variables. Qdrant, Neo4j, and reranking remain optional production integrations.
 
 ## API Demo
 
@@ -217,7 +217,6 @@ http://127.0.0.1:3000
 Demo checks:
 
 - Upload a supported document and confirm the `Document path` field updates.
-- Switch `Orchestrator` between `Auto` and `Local deterministic` for the local demo.
 - Run `Query` mode and inspect the final grounded answer.
 - Run `Stream` mode and watch `answer_delta` events render progressively.
 - Inspect source snippets and retrieval highlights.
@@ -227,6 +226,6 @@ Demo checks:
 ## Current Limitations
 
 - Local vector retrieval is vector-like lexical scoring, not a learned embedding model.
-- Qdrant, Neo4j, reranker, and LangGraph production adapters are readiness boundaries rather than live service implementations.
+- Qdrant, Neo4j, and reranker production adapters are readiness boundaries rather than live service implementations.
 - PDF ingestion depends on extractable text and does not perform OCR.
 - The deterministic judge uses lexical overlap and should be replaced or augmented with an LLM judge for production evaluation.

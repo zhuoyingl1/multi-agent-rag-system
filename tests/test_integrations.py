@@ -10,7 +10,8 @@ def test_check_integrations_reports_local_ready() -> None:
     assert statuses["qdrant"].status == "missing_config"
     assert statuses["neo4j"].status == "missing_config"
     assert statuses["bge_reranker"].status == "missing_config"
-    assert statuses["langgraph"].status == "missing_config"
+    assert statuses["langgraph"].status in {"ready", "missing_package"}
+    assert statuses["langgraph"].configured is True
 
 
 def test_check_integrations_reports_missing_package_when_configured() -> None:

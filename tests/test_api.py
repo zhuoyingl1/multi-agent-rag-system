@@ -42,6 +42,9 @@ def test_query_endpoint_returns_grounded_answer() -> None:
     assert "Answer:" in data["answer"]
     assert data["metrics"]["retrieved_sources"] >= 1
     assert data["metrics"]["mode"] == "deterministic_local"
+    assert data["workflow_trace"]["mode"] == "deterministic_local"
+    assert data["workflow_trace"]["evidence_status"] == "sufficient"
+    assert data["workflow_trace"]["selected_agents"]
 
 
 def test_query_endpoint_rejects_invalid_orchestrator() -> None:
