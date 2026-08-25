@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 9 adds answer delta streaming on top of workflow-stage SSE events, so the frontend can render streamed answers progressively before the final payload arrives.
+Step 10 adds PDF text normalization so extracted resume and report content is cleaner before chunking, retrieval, and answer generation.
 
 ## Implemented Capabilities
 
@@ -18,6 +18,7 @@ Step 9 adds answer delta streaming on top of workflow-stage SSE events, so the f
 - Deterministic planner, coordinator, expert, grounding judge, and summarizer agents
 - Local `ask` command for an end-to-end workflow demo
 - Document ingestion for text, Markdown, JSON, CSV, and basic text-based PDF files
+- PDF text cleanup for common extraction artifacts such as private-use bullets and replacement characters
 - Local `ingest` command for document loading and chunking inspection
 - UTF-8 CLI output configuration for PDF text with special characters
 - Structured deterministic answers with evidence and unsupported-claim reporting

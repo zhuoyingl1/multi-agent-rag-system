@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -98,7 +99,34 @@ def _read_pdf(path: Path) -> str:
 
     reader = PdfReader(str(path))
     pages = [(page.extract_text() or "").strip() for page in reader.pages]
-    text = "\n\n".join(page for page in pages if page)
+    text = _normalize_extracted_text("\n\n".join(page for page in pages if page))
     if not text:
         raise ValueError(f"No extractable text found in PDF: {path}")
     return text
+
+
+def _normalize_extracted_text(text: str) -> str:
+    replacements = {
+        "\u00a0": " ",
+        "\uf020": " ",
+        "\uf06c": "- ",
+        "\uf0b7": "- ",
+        "\u2022": "- ",
+        "\u25cf": "- ",
+        "\ufffd": "",
+    }
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    normalized_lines: list[str] = []
+    blank_seen = False
+    for line in lines:
+        if not line:
+            if not blank_seen:
+                normalized_lines.append("")
+            blank_seen = True
+            continue
+        normalized_lines.append(line)
+        blank_seen = False
+    return "\n".join(normalized_lines).strip()

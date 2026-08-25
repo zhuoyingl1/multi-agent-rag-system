@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from multi_agent_rag.documents import load_document
+from multi_agent_rag.documents import _normalize_extracted_text, load_document
 
 
 def test_load_markdown_document(tmp_path) -> None:
@@ -44,3 +44,14 @@ def test_load_document_rejects_unsupported_extension(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="Unsupported document extension"):
         load_document(path)
+
+
+def test_normalize_extracted_text_cleans_pdf_artifacts() -> None:
+    text = "Skills \uf06c RAG\u00a0systems\n\n\nTools \ufffd FastAPI"
+
+    normalized = _normalize_extracted_text(text)
+
+    assert "\uf06c" not in normalized
+    assert "\ufffd" not in normalized
+    assert "Skills - RAG systems" in normalized
+    assert "\n\n\n" not in normalized
