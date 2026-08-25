@@ -8,6 +8,7 @@ from pathlib import Path
 
 from multi_agent_rag import __version__
 from multi_agent_rag.documents import load_document
+from multi_agent_rag.evaluation import run_evaluation
 from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.hybrid import HybridRetriever
 from multi_agent_rag.workflow import MultiAgentRAGWorkflow
@@ -40,6 +41,12 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_parser.add_argument("document", help="Path to a local supported document.")
     ingest_parser.set_defaults(func=run_ingest)
 
+    eval_parser = subparsers.add_parser("eval", help="Run deterministic local evaluation cases.")
+    eval_parser.add_argument("--document", default="examples/sample_docs.md", help="Path to a local supported document.")
+    eval_parser.add_argument("--cases", default="examples/eval_cases.json", help="Path to evaluation cases JSON.")
+    eval_parser.add_argument("--output", help="Optional path for the JSON evaluation report.")
+    eval_parser.set_defaults(func=run_eval)
+
     return parser
 
 
@@ -50,6 +57,7 @@ def print_plan(_args: argparse.Namespace) -> int:
         "3. Local hybrid retrieval",
         "4. Multi-agent workflow and document ingestion",
         "5. API, streaming, metrics, and demo evidence",
+        "6. Frontend console and deterministic evaluation runner",
     ]
     print("Implementation plan:")
     for stage in stages:
@@ -85,6 +93,39 @@ def run_ingest(args: argparse.Namespace) -> int:
     for chunk_type, count in sorted(counts.items()):
         print(f"- {chunk_type}: {count}")
     return 0
+
+
+def run_eval(args: argparse.Namespace) -> int:
+    report = run_evaluation(Path(args.document), Path(args.cases))
+    print("Evaluation report:")
+    print(f"- document: {report.document_path}")
+    print(f"- cases: {report.case_count}")
+    print(f"- passed: {report.passed_count}")
+    print(f"- failed: {report.failed_count}")
+    print(f"- pass_rate: {report.pass_rate}")
+    print(f"- average_grounding_score: {report.average_grounding_score}")
+    print(f"- average_latency_ms: {report.average_latency_ms}")
+    print(f"- average_retrieved_sources: {report.average_retrieved_sources}")
+    print(f"- total_failed_agents: {report.total_failed_agents}")
+    print("Cases:")
+    for case in report.cases:
+        status = "PASS" if case.passed else "FAIL"
+        print(
+            f"- {case.case_id}: {status} "
+            f"grounding={case.grounding_score} sources={case.retrieved_sources} latency_ms={case.latency_ms}"
+        )
+        if case.missing_expected_terms:
+            print(f"  missing_expected_terms: {', '.join(case.missing_expected_terms)}")
+        if case.missing_source_terms:
+            print(f"  missing_source_terms: {', '.join(case.missing_source_terms)}")
+
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(report.to_json() + "\n", encoding="utf-8")
+        print(f"JSON report written to {output_path}")
+    return 0
+
 
 def main(argv: list[str] | None = None) -> int:
     configure_output()

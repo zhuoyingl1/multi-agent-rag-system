@@ -1,0 +1,25 @@
+{
+  "cases": [
+    {
+      "case_id": "rag_grounding",
+      "query": "How does RAG reduce hallucination?",
+      "expected_terms": ["RAG", "grounding", "source evidence"],
+      "required_source_terms": ["retrieved source evidence", "hallucination"],
+      "min_grounding_score": 0.5
+    },
+    {
+      "case_id": "hybrid_retrieval",
+      "query": "How do keyword search, vector retrieval, Neo4j, and Qdrant support retrieval?",
+      "expected_terms": ["Keyword", "Vector", "Neo4j", "Qdrant"],
+      "required_source_terms": ["Keyword search", "Vector retrieval", "Neo4j", "Qdrant"],
+      "min_grounding_score": 0.5
+    },
+    {
+      "case_id": "quality_metrics",
+      "query": "How do source coverage, latency, and error rate monitor answer quality and operations?",
+      "expected_terms": ["Source coverage", "Latency", "Error rate"],
+      "required_source_terms": ["Source coverage", "Latency", "Error rate"],
+      "min_grounding_score": 0.5
+    }
+  ]
+}
