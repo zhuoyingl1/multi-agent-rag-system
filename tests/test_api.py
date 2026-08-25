@@ -55,6 +55,14 @@ def test_query_endpoint_rejects_invalid_orchestrator() -> None:
     assert response.status_code == 422
 
 
+def test_query_endpoint_rejects_invalid_retrieval_backend() -> None:
+    client = TestClient(build_app())
+
+    response = client.post("/query", json={"query": "How does RAG reduce hallucination?", "retrieval_backend": "invalid"})
+
+    assert response.status_code == 422
+
+
 def test_query_endpoint_returns_fallback_for_insufficient_evidence() -> None:
     client = TestClient(build_app())
 

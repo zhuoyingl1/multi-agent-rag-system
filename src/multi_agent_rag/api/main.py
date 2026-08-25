@@ -22,7 +22,7 @@ from multi_agent_rag.models import AgentResult, SearchResult, WorkflowResult
 from multi_agent_rag.observability import metrics_registry
 from multi_agent_rag.orchestration import create_workflow
 from multi_agent_rag.retrieval.chunking import chunk_document
-from multi_agent_rag.retrieval.hybrid import HybridRetriever
+from multi_agent_rag.retrieval.factory import create_retriever
 
 DEFAULT_DOCUMENT_PATH = Path("examples/sample_docs.md")
 DEFAULT_EVAL_CASES_PATH = Path("examples/eval_cases.json")
@@ -37,6 +37,7 @@ class QueryRequest(BaseModel):
     query: str = Field(min_length=1)
     document_path: str = Field(default=str(DEFAULT_DOCUMENT_PATH), min_length=1)
     orchestrator: str = Field(default="auto", pattern="^(auto|local|langgraph)$")
+    retrieval_backend: str = Field(default="qdrant", pattern="^(local|qdrant)$")
 
 
 class EvaluationRequest(BaseModel):
@@ -45,6 +46,7 @@ class EvaluationRequest(BaseModel):
     document_path: str = Field(default=str(DEFAULT_DOCUMENT_PATH), min_length=1)
     cases_path: str = Field(default=str(DEFAULT_EVAL_CASES_PATH), min_length=1)
     orchestrator: str = Field(default="auto", pattern="^(auto|local|langgraph)$")
+    retrieval_backend: str = Field(default="qdrant", pattern="^(local|qdrant)$")
 
 
 class UploadResponse(BaseModel):
@@ -89,17 +91,22 @@ def build_app() -> FastAPI:
 
     @app.post("/evaluate")
     def evaluate(request: EvaluationRequest) -> dict[str, Any]:
-        return safe_run_evaluation(Path(request.document_path), Path(request.cases_path), request.orchestrator).to_dict()
+        return safe_run_evaluation(
+            Path(request.document_path),
+            Path(request.cases_path),
+            request.orchestrator,
+            request.retrieval_backend,
+        ).to_dict()
 
     @app.post("/query")
     def query(request: QueryRequest) -> dict[str, Any]:
-        result = safe_run_query(request.query, Path(request.document_path), request.orchestrator)
+        result = safe_run_query(request.query, Path(request.document_path), request.orchestrator, request.retrieval_backend)
         metrics_registry.record_run(result.metrics)
         return workflow_payload(result)
 
     @app.post("/query/stream")
     def query_stream(request: QueryRequest) -> StreamingResponse:
-        result = safe_run_query(request.query, Path(request.document_path), request.orchestrator)
+        result = safe_run_query(request.query, Path(request.document_path), request.orchestrator, request.retrieval_backend)
         metrics_registry.record_run(result.metrics)
 
         def events():
@@ -117,11 +124,21 @@ def build_app() -> FastAPI:
     return app
 
 
-def run_query(query: str, document_path: Path, orchestrator: str | None = None) -> WorkflowResult:
+def run_query(
+    query: str,
+    document_path: Path,
+    orchestrator: str | None = None,
+    retrieval_backend: str | None = None,
+) -> WorkflowResult:
     document = load_document(document_path)
-    retriever = HybridRetriever()
+    retriever = create_retriever(retrieval_backend)
     retriever.index(chunk_document(document))
-    return create_workflow(retriever, orchestrator=orchestrator).run(query)
+    try:
+        return create_workflow(retriever, orchestrator=orchestrator).run(query)
+    finally:
+        close = getattr(retriever, "close", None)
+        if callable(close):
+            close()
 
 
 async def save_uploaded_document(file: UploadFile) -> UploadResponse:
@@ -150,18 +167,28 @@ async def save_uploaded_document(file: UploadFile) -> UploadResponse:
     )
 
 
-def safe_run_query(query: str, document_path: Path, orchestrator: str | None = None) -> WorkflowResult:
+def safe_run_query(
+    query: str,
+    document_path: Path,
+    orchestrator: str | None = None,
+    retrieval_backend: str | None = None,
+) -> WorkflowResult:
     try:
-        return run_query(query, document_path, orchestrator=orchestrator)
+        return run_query(query, document_path, orchestrator=orchestrator, retrieval_backend=retrieval_backend)
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def safe_run_evaluation(document_path: Path, cases_path: Path, orchestrator: str | None = None) -> EvalReport:
+def safe_run_evaluation(
+    document_path: Path,
+    cases_path: Path,
+    orchestrator: str | None = None,
+    retrieval_backend: str | None = None,
+) -> EvalReport:
     if not cases_path.exists():
         raise HTTPException(status_code=400, detail=f"Evaluation cases not found: {cases_path}")
     try:
-        return run_evaluation(document_path, cases_path, orchestrator=orchestrator)
+        return run_evaluation(document_path, cases_path, orchestrator=orchestrator, retrieval_backend=retrieval_backend)
     except (FileNotFoundError, ValueError, RuntimeError, KeyError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

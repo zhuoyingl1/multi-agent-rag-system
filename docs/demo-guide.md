@@ -21,6 +21,7 @@ From the repository root:
 
 ```powershell
 python -m pip install -e ".[dev]"
+docker compose up -d qdrant
 python -m pytest -q
 ```
 
@@ -62,6 +63,27 @@ The local deterministic orchestrator remains available as a test baseline:
 
 ```powershell
 python -m multi_agent_rag ask "How does RAG reduce hallucination?" --orchestrator local
+```
+
+The default retrieval path uses the external Qdrant service from `docker-compose.yml`. Start it before API, CLI, or frontend queries:
+
+```powershell
+docker compose up -d qdrant
+```
+
+Override the Qdrant connection details when using another service:
+
+```powershell
+$env:RETRIEVAL_BACKEND = "qdrant"
+$env:QDRANT_URL = "http://localhost:6333"
+$env:QDRANT_COLLECTION = "documents"
+python -m multi_agent_rag ask "How does RAG reduce hallucination?" --retrieval-backend qdrant
+```
+
+The local hybrid retriever remains available as a no-service test baseline:
+
+```powershell
+python -m multi_agent_rag ask "How does RAG reduce hallucination?" --retrieval-backend local
 ```
 
 Expected answer shape:
@@ -129,9 +151,9 @@ Expected local output:
 
 ```text
 mode: local_with_optional_integrations
-ready: 2/5
+ready: 3/5
 local_hybrid_store: ready
-qdrant: missing_config
+qdrant: ready
 neo4j: missing_config
 bge_reranker: missing_config
 langgraph: ready
@@ -169,7 +191,8 @@ Sample `/query` request:
 {
   "query": "How does RAG reduce hallucination?",
   "document_path": "examples/sample_docs.md",
-  "orchestrator": "local"
+  "orchestrator": "langgraph",
+  "retrieval_backend": "qdrant"
 }
 ```
 

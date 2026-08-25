@@ -12,8 +12,8 @@ from dataclasses import asdict, dataclass
 class IntegrationConfig:
     """Configuration values for optional production integrations."""
 
-    qdrant_url: str | None = None
-    qdrant_collection: str | None = None
+    qdrant_url: str | None = "http://localhost:6333"
+    qdrant_collection: str | None = "documents"
     neo4j_uri: str | None = None
     neo4j_user: str | None = None
     neo4j_database: str | None = None
@@ -22,8 +22,8 @@ class IntegrationConfig:
     @classmethod
     def from_env(cls) -> "IntegrationConfig":
         return cls(
-            qdrant_url=os.getenv("QDRANT_URL"),
-            qdrant_collection=os.getenv("QDRANT_COLLECTION"),
+            qdrant_url=os.getenv("QDRANT_URL") or "http://localhost:6333",
+            qdrant_collection=os.getenv("QDRANT_COLLECTION") or "documents",
             neo4j_uri=os.getenv("NEO4J_URI"),
             neo4j_user=os.getenv("NEO4J_USER"),
             neo4j_database=os.getenv("NEO4J_DATABASE"),

@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 20 makes LangGraph the default orchestration path when available, with a deterministic local fallback for tests and constrained environments.
+Step 21 makes an external Qdrant server the default retrieval path, with local hybrid retrieval retained as a no-service test fallback.
 
 ## Implemented Capabilities
 
@@ -37,6 +37,7 @@ Step 20 makes LangGraph the default orchestration path when available, with a de
 - Document upload API and frontend upload workflow
 - LangGraph workflow adapter with CLI and API orchestration support
 - Internal workflow trace metadata for orchestration mode, evidence status, agents, and retrieved sources
+- Qdrant retrieval adapter and retrieval backend factory for production vector search
 
 ## Planned Capabilities
 

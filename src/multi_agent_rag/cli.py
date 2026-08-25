@@ -12,7 +12,7 @@ from multi_agent_rag.evaluation import run_evaluation
 from multi_agent_rag.integrations import check_integrations
 from multi_agent_rag.orchestration import create_workflow
 from multi_agent_rag.retrieval.chunking import chunk_document
-from multi_agent_rag.retrieval.hybrid import HybridRetriever
+from multi_agent_rag.retrieval.factory import create_retriever
 
 
 def configure_output() -> None:
@@ -37,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     ask_parser.add_argument("query", help="Research question to answer from the demo documents.")
     ask_parser.add_argument("--document", default="examples/sample_docs.md", help="Path to a local supported document.")
     ask_parser.add_argument("--orchestrator", choices=["auto", "local", "langgraph"], default="auto", help="Workflow orchestration backend.")
+    ask_parser.add_argument("--retrieval-backend", choices=["local", "qdrant"], default=None, help="Retrieval backend.")
     ask_parser.set_defaults(func=run_ask)
 
     ingest_parser = subparsers.add_parser("ingest", help="Load and chunk a local supported document.")
@@ -48,6 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--cases", default="examples/eval_cases.json", help="Path to evaluation cases JSON.")
     eval_parser.add_argument("--output", help="Optional path for the JSON evaluation report.")
     eval_parser.add_argument("--orchestrator", choices=["auto", "local", "langgraph"], default="auto", help="Workflow orchestration backend.")
+    eval_parser.add_argument("--retrieval-backend", choices=["local", "qdrant"], default=None, help="Retrieval backend.")
     eval_parser.set_defaults(func=run_eval)
 
     integrations_parser = subparsers.add_parser("integrations", help="Show optional production integration readiness.")
@@ -74,9 +76,14 @@ def print_plan(_args: argparse.Namespace) -> int:
 
 def run_ask(args: argparse.Namespace) -> int:
     document = load_document(Path(args.document))
-    retriever = HybridRetriever()
+    retriever = create_retriever(args.retrieval_backend)
     retriever.index(chunk_document(document))
-    result = create_workflow(retriever, orchestrator=args.orchestrator).run(args.query)
+    try:
+        result = create_workflow(retriever, orchestrator=args.orchestrator).run(args.query)
+    finally:
+        close = getattr(retriever, "close", None)
+        if callable(close):
+            close()
 
     print(result.answer)
     print("\nAgents:")
@@ -104,7 +111,12 @@ def run_ingest(args: argparse.Namespace) -> int:
 
 
 def run_eval(args: argparse.Namespace) -> int:
-    report = run_evaluation(Path(args.document), Path(args.cases), orchestrator=args.orchestrator)
+    report = run_evaluation(
+        Path(args.document),
+        Path(args.cases),
+        orchestrator=args.orchestrator,
+        retrieval_backend=args.retrieval_backend,
+    )
     print("Evaluation report:")
     print(f"- document: {report.document_path}")
     print(f"- cases: {report.case_count}")
