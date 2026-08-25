@@ -60,6 +60,10 @@ npm install
 npm run dev
 ```
 
+## Demo Guide
+
+See [docs/demo-guide.md](docs/demo-guide.md) for CLI, API, frontend, evaluation, and integration readiness demo notes.
+
 ## Project Layout
 
 ```text
@@ -67,6 +71,7 @@ src/multi_agent_rag/   Python package
 examples/              Demo documents and sample inputs
 tests/                 Local tests that avoid external services
 frontend/              Next.js local console
+docs/                  Demo and project notes
 ```
 
 ## Development Approach
