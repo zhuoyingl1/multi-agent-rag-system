@@ -7,7 +7,7 @@ import os
 from typing import Protocol
 
 from multi_agent_rag.models import WorkflowResult
-from multi_agent_rag.retrieval.hybrid import HybridRetriever
+from multi_agent_rag.retrieval.factory import Retriever
 from multi_agent_rag.workflow import MultiAgentRAGWorkflow
 
 
@@ -18,7 +18,7 @@ class WorkflowRunner(Protocol):
         """Run a query through the selected workflow."""
 
 
-def create_workflow(retriever: HybridRetriever, top_k: int = 5, orchestrator: str | None = None) -> WorkflowRunner:
+def create_workflow(retriever: Retriever, top_k: int = 5, orchestrator: str | None = None) -> WorkflowRunner:
     selected = (orchestrator or os.getenv("RAG_ORCHESTRATOR") or "auto").lower()
     if selected not in {"auto", "local", "langgraph"}:
         raise ValueError("Workflow orchestrator must be one of: auto, local, langgraph")

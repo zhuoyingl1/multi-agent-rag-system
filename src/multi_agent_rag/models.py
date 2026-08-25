@@ -13,6 +13,7 @@ class RetrievalType(str, Enum):
     KEYWORD = "keyword"
     VECTOR = "vector"
     ENTITY = "entity"
+    RERANKED = "reranked"
 
 
 class ChunkType(str, Enum):

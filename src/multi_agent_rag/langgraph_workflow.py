@@ -12,7 +12,7 @@ from multi_agent_rag.agents.planner import PlannerAgent
 from multi_agent_rag.agents.summarizer import SummarizerAgent
 from multi_agent_rag.models import AgentPlan, AgentResult, Coordination, JudgeResult, SearchResult, WorkflowResult
 from multi_agent_rag.retrieval.hybrid import HybridRetriever
-from multi_agent_rag.workflow import has_enough_evidence
+from multi_agent_rag.workflow import has_enough_evidence, retriever_candidate_count, retriever_reranker_name
 
 
 class LangGraphState(TypedDict, total=False):
@@ -23,6 +23,7 @@ class LangGraphState(TypedDict, total=False):
     plan: AgentPlan
     sources: list[SearchResult]
     evidence_sufficient: bool
+    candidate_count: int
     coordination: Coordination
     agents: list[AgentResult]
     grounding: JudgeResult
@@ -83,7 +84,11 @@ class LangGraphRAGWorkflow:
 
     def _retrieve(self, state: LangGraphState) -> LangGraphState:
         sources = self.retriever.retrieve(state["query"], top_k=self.top_k)
-        return {"sources": sources, "evidence_sufficient": has_enough_evidence(state["query"], sources)}
+        return {
+            "sources": sources,
+            "evidence_sufficient": has_enough_evidence(state["query"], sources),
+            "candidate_count": retriever_candidate_count(self.retriever, sources),
+        }
 
     def _route_after_retrieval(self, state: LangGraphState) -> str:
         return "sufficient" if state["evidence_sufficient"] else "insufficient"
@@ -98,7 +103,7 @@ class LangGraphRAGWorkflow:
             grounding=grounding,
             answer=answer,
             sources=[],
-            candidate_sources=len(sources),
+            candidate_sources=int(state.get("candidate_count", len(sources))),
             evidence_status="insufficient",
         )
         return {"agents": [], "grounding": grounding, "answer": answer, "result": result}
@@ -125,7 +130,7 @@ class LangGraphRAGWorkflow:
             grounding=state["grounding"],
             answer=answer,
             sources=state["sources"],
-            candidate_sources=len(state["sources"]),
+            candidate_sources=int(state.get("candidate_count", len(state["sources"]))),
             evidence_status="sufficient",
         )
         return {"answer": answer, "result": result}
@@ -151,6 +156,7 @@ class LangGraphRAGWorkflow:
             "latency_ms": latency_ms,
             "mode": "langgraph",
             "evidence_status": evidence_status,
+            "reranker": retriever_reranker_name(self.retriever),
         }
         return WorkflowResult(
             query=state["query"],

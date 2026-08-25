@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 22 adds an external Neo4j graph adapter for chunk/entity relationships alongside the default LangGraph and Qdrant runtime.
+Step 23 adds configurable reranking for retrieved candidates, including a sentence-transformers path for BGE-style cross-encoder models.
 
 ## Implemented Capabilities
 
@@ -39,6 +39,7 @@ Step 22 adds an external Neo4j graph adapter for chunk/entity relationships alon
 - Internal workflow trace metadata for orchestration mode, evidence status, agents, and retrieved sources
 - Qdrant retrieval adapter and retrieval backend factory for production vector search
 - Neo4j graph adapter for document chunk and entity relationship indexing
+- Configurable reranking wrapper for local, Qdrant, and BGE-style candidate reranking
 
 ## Planned Capabilities
 

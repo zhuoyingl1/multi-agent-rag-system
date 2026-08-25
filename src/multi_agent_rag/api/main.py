@@ -212,6 +212,8 @@ def workflow_trace_payload(result: WorkflowResult) -> dict[str, Any]:
         "evidence_status": result.metrics.get("evidence_status", "unknown"),
         "selected_agents": result.plan.selected_agents,
         "retrieved_sources": result.metrics.get("retrieved_sources", len(result.sources)),
+        "candidate_sources": result.metrics.get("candidate_sources", len(result.sources)),
+        "reranker": result.metrics.get("reranker", "none"),
         "completed_agents": result.metrics.get("completed_agents", len(result.agents)),
         "failed_agents": result.metrics.get("failed_agents", 0),
     }

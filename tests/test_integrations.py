@@ -22,3 +22,13 @@ def test_check_integrations_reports_missing_package_when_configured() -> None:
 
     assert statuses["qdrant"].status in {"ready", "missing_package"}
     assert statuses["qdrant"].configured is True
+
+
+def test_check_integrations_reports_local_reranker_ready() -> None:
+    report = check_integrations(IntegrationConfig(reranker_model="local"))
+    statuses = {item.name: item for item in report.integrations}
+
+    assert statuses["bge_reranker"].status == "ready"
+    assert statuses["bge_reranker"].required_package is None
+    assert statuses["bge_reranker"].configured is True
+    assert report.mode == "local_with_optional_integrations"

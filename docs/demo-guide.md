@@ -30,7 +30,7 @@ python -m pytest -q
 Expected test result:
 
 ```text
-62 passed
+67 passed
 ```
 
 The exact runtime can vary by machine.
@@ -88,6 +88,26 @@ The local hybrid retriever remains available as a no-service test baseline:
 python -m multi_agent_rag ask "How does RAG reduce hallucination?" --retrieval-backend local
 ```
 
+Enable deterministic local reranking for a lightweight inspection path:
+
+```powershell
+$env:RERANKER_MODEL = "local"
+$env:RERANKER_CANDIDATE_MULTIPLIER = "3"
+python -m multi_agent_rag ask "How does RAG reduce hallucination?" --retrieval-backend local
+Remove-Item Env:RERANKER_MODEL
+Remove-Item Env:RERANKER_CANDIDATE_MULTIPLIER
+```
+
+Enable BGE-style reranking after installing production dependencies:
+
+```powershell
+python -m pip install -e ".[production]"
+$env:RERANKER_MODEL = "BAAI/bge-reranker-base"
+python -m multi_agent_rag ask "How does RAG reduce hallucination?" --retrieval-backend qdrant
+```
+
+When reranking is enabled, metrics include `reranker` and `candidate_sources`, and returned source items use the `reranked` retrieval type.
+
 Index a document into Neo4j and inspect graph-expanded entities:
 
 ```powershell
@@ -98,7 +118,7 @@ Expected graph output shape:
 
 ```text
 Document: sample_docs.md
-Chunks indexed: 5
+Chunks indexed: 8
 Related entities:
 - ...
 ```
@@ -176,7 +196,7 @@ bge_reranker: missing_config
 langgraph: ready
 ```
 
-The exact ready count depends on installed packages and environment variables. Qdrant and Neo4j are configured by default through `docker-compose.yml`; reranking remains an optional production integration.
+The exact ready count depends on installed packages and environment variables. Qdrant and Neo4j are configured by default through `docker-compose.yml`; BGE reranking becomes ready after `RERANKER_MODEL` is set and `sentence-transformers` is installed.
 
 ## API Demo
 
@@ -280,6 +300,6 @@ Demo checks:
 
 - Local vector retrieval is vector-like lexical scoring, not a learned embedding model.
 - Qdrant and Neo4j require Docker services for the production-style path.
-- The reranker production adapter remains a readiness boundary rather than a live service implementation.
+- BGE reranking requires `sentence-transformers` and model download access when using a real model name.
 - PDF ingestion depends on extractable text and does not perform OCR.
 - The deterministic judge uses lexical overlap and should be replaced or augmented with an LLM judge for production evaluation.

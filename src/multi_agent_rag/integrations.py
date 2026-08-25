@@ -86,13 +86,7 @@ def check_integrations(config: IntegrationConfig | None = None) -> IntegrationRe
             configured=bool(current.neo4j_uri and current.neo4j_user),
             config_note="Set NEO4J_URI and NEO4J_USER to enable this path.",
         ),
-        _status(
-            name="bge_reranker",
-            role="Cross-encoder or BGE-style reranking for retrieved candidates",
-            required_package="sentence_transformers",
-            configured=bool(current.reranker_model),
-            config_note="Set RERANKER_MODEL to enable this path.",
-        ),
+        _reranker_status(current.reranker_model),
         _status(
             name="langgraph",
             role="Production multi-agent orchestration graph",
@@ -102,7 +96,9 @@ def check_integrations(config: IntegrationConfig | None = None) -> IntegrationRe
         ),
     ]
     ready_count = len([status for status in statuses if status.status == "ready"])
-    mode = "production_ready" if ready_count == len(statuses) else "local_with_optional_integrations"
+    reranker_status = next(status for status in statuses if status.name == "bge_reranker")
+    production_reranker_ready = reranker_status.status == "ready" and reranker_status.required_package == "sentence_transformers"
+    mode = "production_ready" if ready_count == len(statuses) and production_reranker_ready else "local_with_optional_integrations"
     return IntegrationReport(
         mode=mode,
         ready_count=ready_count,
@@ -130,4 +126,35 @@ def _status(name: str, role: str, required_package: str, configured: bool, confi
         configured=configured,
         package_available=package_available,
         notes=notes,
+    )
+
+
+def _reranker_status(model_name: str | None) -> IntegrationStatus:
+    role = "Cross-encoder or BGE-style reranking for retrieved candidates"
+    if not model_name:
+        return IntegrationStatus(
+            name="bge_reranker",
+            role=role,
+            status="missing_config",
+            required_package="sentence_transformers",
+            configured=False,
+            package_available=importlib.util.find_spec("sentence_transformers") is not None,
+            notes="Set RERANKER_MODEL to enable this path.",
+        )
+    if model_name.lower() in {"local", "lexical", "deterministic"}:
+        return IntegrationStatus(
+            name="bge_reranker",
+            role=role,
+            status="ready",
+            required_package=None,
+            configured=True,
+            package_available=True,
+            notes="Built-in deterministic reranking is configured for local inspection.",
+        )
+    return _status(
+        name="bge_reranker",
+        role=role,
+        required_package="sentence_transformers",
+        configured=True,
+        config_note="Set RERANKER_MODEL to enable this path.",
     )

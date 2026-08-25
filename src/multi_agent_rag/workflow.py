@@ -58,6 +58,8 @@ class MultiAgentRAGWorkflow:
         started = perf_counter()
         plan = self.planner.plan(query)
         sources = self.retriever.retrieve(query, top_k=self.top_k)
+        candidate_count = retriever_candidate_count(self.retriever, sources)
+        reranker = retriever_reranker_name(self.retriever)
         if not self._has_enough_evidence(query, sources):
             grounding = self.judge.judge([], [])
             answer = self.summarizer.summarize(query, [], grounding, [])
@@ -65,13 +67,14 @@ class MultiAgentRAGWorkflow:
             metrics: dict[str, float | int | str] = {
                 "selected_agents": len(plan.selected_agents),
                 "retrieved_sources": 0,
-                "candidate_sources": len(sources),
+                "candidate_sources": candidate_count,
                 "completed_agents": 0,
                 "failed_agents": 0,
                 "grounding_score": grounding.score,
                 "latency_ms": latency_ms,
                 "mode": "deterministic_local",
                 "evidence_status": "insufficient",
+                "reranker": reranker,
             }
             return WorkflowResult(
                 query=query,
@@ -96,13 +99,14 @@ class MultiAgentRAGWorkflow:
         metrics: dict[str, float | int | str] = {
             "selected_agents": len(plan.selected_agents),
             "retrieved_sources": len(sources),
-            "candidate_sources": len(sources),
+            "candidate_sources": candidate_count,
             "completed_agents": len([result for result in agent_results if result.error is None]),
             "failed_agents": len([result for result in agent_results if result.error is not None]),
             "grounding_score": grounding.score,
             "latency_ms": latency_ms,
             "mode": "deterministic_local",
             "evidence_status": "sufficient",
+            "reranker": reranker,
         }
         return WorkflowResult(
             query=query,
@@ -130,3 +134,11 @@ def has_enough_evidence(query: str, sources: list[SearchResult]) -> bool:
     min_required = 1 if len(set(query_terms)) <= 2 else 2
     coverage = len(matched_terms) / max(1, len(set(query_terms)))
     return len(matched_terms) >= min_required and coverage >= 0.2
+
+
+def retriever_candidate_count(retriever: object, sources: list[SearchResult]) -> int:
+    return int(getattr(retriever, "last_candidate_count", len(sources)))
+
+
+def retriever_reranker_name(retriever: object) -> str:
+    return str(getattr(retriever, "last_reranker", "none"))
