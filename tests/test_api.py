@@ -75,6 +75,41 @@ def test_query_endpoint_rejects_empty_fields() -> None:
     assert {tuple(error["loc"]) for error in errors} == {("body", "query"), ("body", "document_path")}
 
 
+def test_upload_document_returns_queryable_path() -> None:
+    client = TestClient(build_app())
+
+    upload = client.post(
+        "/documents/upload",
+        files={"file": ("uploaded.md", b"# Uploaded Notes\n\nRAG uses retrieved evidence to reduce hallucination.", "text/markdown")},
+    )
+
+    assert upload.status_code == 200
+    uploaded = upload.json()
+    assert uploaded["filename"] == "uploaded.md"
+    assert uploaded["document_path"].endswith(".md")
+    assert uploaded["size_bytes"] > 0
+
+    response = client.post(
+        "/query",
+        json={"query": "How does RAG reduce hallucination?", "document_path": uploaded["document_path"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["metrics"]["retrieved_sources"] >= 1
+
+
+def test_upload_document_rejects_unsupported_extension() -> None:
+    client = TestClient(build_app())
+
+    response = client.post(
+        "/documents/upload",
+        files={"file": ("notes.exe", b"not a supported document", "application/octet-stream")},
+    )
+
+    assert response.status_code == 400
+    assert "Unsupported document extension" in response.json()["detail"]
+
+
 def test_stream_endpoint_returns_all_events() -> None:
     client = TestClient(build_app())
 

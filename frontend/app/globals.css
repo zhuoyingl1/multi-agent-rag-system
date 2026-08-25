@@ -136,6 +136,10 @@ input {
   padding: 0 12px;
 }
 
+input[type="file"] {
+  padding: 9px 12px;
+}
+
 textarea {
   min-height: 190px;
   resize: vertical;
@@ -468,6 +472,26 @@ textarea:focus {
   opacity: 0.55;
 }
 
+.uploadRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 116px;
+  gap: 8px;
+}
+
+.uploadButton {
+  min-width: 0;
+}
+
+.uploadStatus {
+  min-height: 24px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--panel-soft);
+  color: var(--brand-dark);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .compactError {
   margin-top: 12px;
   padding: 10px 12px;
@@ -569,5 +593,9 @@ textarea:focus {
   .caseItem {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .uploadRow {
+    grid-template-columns: 1fr;
   }
 }

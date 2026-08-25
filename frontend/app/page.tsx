@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, BarChart3, Bot, Database, FileText, Loader2, Network, Play, Radio, RefreshCw, Send } from "lucide-react";
+import { Activity, BarChart3, Bot, Database, FileText, Loader2, Network, Play, Radio, RefreshCw, Send, Upload } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type Source = {
@@ -18,6 +18,13 @@ type QueryResponse = {
   answer: string;
   sources: Source[];
   metrics: Record<string, string | number>;
+};
+
+type UploadResponse = {
+  filename: string;
+  document_path: string;
+  content_type: string | null;
+  size_bytes: number;
 };
 
 type HealthMetrics = {
@@ -87,6 +94,9 @@ export default function Home() {
   const [evaluating, setEvaluating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [evaluationError, setEvaluationError] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
 
   const sourceCount = result?.sources.length ?? 0;
   const displayedAnswer = result?.answer ?? streamedAnswer;
@@ -180,6 +190,35 @@ export default function Home() {
 
   function updateDocumentPath(value: string) {
     setDocumentPath(value);
+  }
+
+  async function uploadDocument() {
+    if (!selectedFile) {
+      return;
+    }
+
+    setUploading(true);
+    setUploadStatus(null);
+    setError(null);
+    try {
+      const body = new FormData();
+      body.append("file", selectedFile);
+      const response = await fetch(`${apiBaseUrl}/documents/upload`, {
+        method: "POST",
+        body,
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, `Upload request failed with ${response.status}`));
+      }
+      const uploaded = (await response.json()) as UploadResponse;
+      setDocumentPath(uploaded.document_path);
+      setUploadStatus(`Uploaded ${uploaded.filename}`);
+    } catch (caught) {
+      setUploadStatus(null);
+      setError(caught instanceof Error ? caught.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
   }
 
   async function runStandardQuery() {
@@ -292,6 +331,24 @@ export default function Home() {
 
           <label htmlFor="documentPath">Document path</label>
           <input id="documentPath" value={documentPath} onChange={(event) => updateDocumentPath(event.target.value)} />
+
+          <label htmlFor="documentUpload">Upload document</label>
+          <div className="uploadRow">
+            <input
+              id="documentUpload"
+              type="file"
+              accept=".md,.markdown,.txt,.json,.csv,.pdf"
+              onChange={(event) => {
+                setSelectedFile(event.target.files?.[0] ?? null);
+                setUploadStatus(null);
+              }}
+            />
+            <button className="secondaryButton uploadButton" type="button" onClick={uploadDocument} disabled={uploading || !selectedFile}>
+              {uploading ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
+              Upload
+            </button>
+          </div>
+          {uploadStatus && <div className="uploadStatus">{uploadStatus}</div>}
 
           <label htmlFor="query">Question</label>
           <textarea id="query" value={query} onChange={(event) => updateQuery(event.target.value)} rows={7} />

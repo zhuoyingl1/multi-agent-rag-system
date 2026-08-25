@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import json
+import re
+from uuid import uuid4
 from pathlib import Path
 from time import sleep
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from multi_agent_rag.documents import load_document
+from multi_agent_rag.documents import SUPPORTED_EXTENSIONS
 from multi_agent_rag.evaluation import EvalReport, run_evaluation
 from multi_agent_rag.integrations import check_integrations
 from multi_agent_rag.models import AgentResult, SearchResult, WorkflowResult
@@ -23,6 +26,7 @@ from multi_agent_rag.workflow import MultiAgentRAGWorkflow
 
 DEFAULT_DOCUMENT_PATH = Path("examples/sample_docs.md")
 DEFAULT_EVAL_CASES_PATH = Path("examples/eval_cases.json")
+UPLOAD_DIR = Path("output/uploads")
 STREAM_DELTA_CHARS = 120
 STREAM_DELTA_DELAY_SECONDS = 0.02
 
@@ -39,6 +43,15 @@ class EvaluationRequest(BaseModel):
 
     document_path: str = Field(default=str(DEFAULT_DOCUMENT_PATH), min_length=1)
     cases_path: str = Field(default=str(DEFAULT_EVAL_CASES_PATH), min_length=1)
+
+
+class UploadResponse(BaseModel):
+    """API response for uploaded local documents."""
+
+    filename: str
+    document_path: str
+    content_type: str | None
+    size_bytes: int
 
 
 def build_app() -> FastAPI:
@@ -67,6 +80,10 @@ def build_app() -> FastAPI:
     @app.get("/health/integrations")
     def health_integrations() -> dict[str, Any]:
         return check_integrations().to_dict()
+
+    @app.post("/documents/upload")
+    async def upload_document(file: UploadFile = File(...)) -> dict[str, Any]:
+        return (await save_uploaded_document(file)).model_dump()
 
     @app.post("/evaluate")
     def evaluate(request: EvaluationRequest) -> dict[str, Any]:
@@ -103,6 +120,32 @@ def run_query(query: str, document_path: Path) -> WorkflowResult:
     retriever = HybridRetriever()
     retriever.index(chunk_document(document))
     return MultiAgentRAGWorkflow(retriever).run(query)
+
+
+async def save_uploaded_document(file: UploadFile) -> UploadResponse:
+    filename = Path(file.filename or "").name
+    if not filename:
+        raise HTTPException(status_code=400, detail="Uploaded file must have a filename.")
+
+    extension = Path(filename).suffix.lower()
+    if extension not in SUPPORTED_EXTENSIONS:
+        supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
+        raise HTTPException(status_code=400, detail=f"Unsupported document extension '{extension}'. Supported extensions: {supported}")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(filename).stem).strip(".-") or "document"
+    saved_path = UPLOAD_DIR / f"{safe_stem}-{uuid4().hex[:8]}{extension}"
+    saved_path.write_bytes(content)
+    return UploadResponse(
+        filename=filename,
+        document_path=str(saved_path),
+        content_type=file.content_type,
+        size_bytes=len(content),
+    )
 
 
 def safe_run_query(query: str, document_path: Path) -> WorkflowResult:

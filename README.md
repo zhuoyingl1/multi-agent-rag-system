@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 17 adds request validation for empty query, document, and evaluation fields, with frontend parsing for FastAPI validation errors.
+Step 18 adds document upload support so the frontend can upload local files and query the saved document path.
 
 ## Implemented Capabilities
 
@@ -34,6 +34,7 @@ Step 17 adds request validation for empty query, document, and evaluation fields
 - FastAPI and frontend evaluation dashboard
 - Consistent API error handling for document loading and evaluation failures
 - Request validation for empty query, document, and evaluation inputs
+- Document upload API and frontend upload workflow
 
 ## Planned Capabilities
 

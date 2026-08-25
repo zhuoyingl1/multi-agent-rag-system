@@ -143,6 +143,7 @@ Useful endpoints:
 - `GET /health`
 - `GET /health/metrics`
 - `GET /health/integrations`
+- `POST /documents/upload`
 - `POST /query`
 - `POST /query/stream`
 - `POST /evaluate`
@@ -173,6 +174,14 @@ Expected `/evaluate` result:
 }
 ```
 
+Sample upload flow:
+
+```powershell
+curl -X POST -F "file=@examples/sample_docs.md" http://127.0.0.1:8000/documents/upload
+```
+
+The response includes a `document_path` value that can be reused in `/query` and `/query/stream`.
+
 ## Frontend Demo
 
 Start the frontend in a second terminal:
@@ -191,6 +200,7 @@ http://127.0.0.1:3000
 
 Demo checks:
 
+- Upload a supported document and confirm the `Document path` field updates.
 - Run `Query` mode and inspect the final grounded answer.
 - Run `Stream` mode and watch `answer_delta` events render progressively.
 - Inspect source snippets and retrieval highlights.
