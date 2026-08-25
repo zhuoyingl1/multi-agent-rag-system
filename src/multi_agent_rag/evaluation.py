@@ -8,9 +8,9 @@ from pathlib import Path
 from statistics import mean
 
 from multi_agent_rag.documents import load_document
+from multi_agent_rag.orchestration import create_workflow
 from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.hybrid import HybridRetriever
-from multi_agent_rag.workflow import MultiAgentRAGWorkflow
 
 
 @dataclass(frozen=True)
@@ -80,11 +80,11 @@ def load_eval_cases(path: str | Path) -> list[EvalCase]:
     ]
 
 
-def run_evaluation(document_path: str | Path, cases_path: str | Path) -> EvalReport:
+def run_evaluation(document_path: str | Path, cases_path: str | Path, orchestrator: str | None = None) -> EvalReport:
     document = load_document(document_path)
     retriever = HybridRetriever()
     retriever.index(chunk_document(document))
-    workflow = MultiAgentRAGWorkflow(retriever)
+    workflow = create_workflow(retriever, orchestrator=orchestrator)
 
     case_results = [_run_case(workflow, case) for case in load_eval_cases(cases_path)]
     passed_count = len([result for result in case_results if result.passed])

@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 18 adds document upload support so the frontend can upload local files and query the saved document path.
+Step 19 adds an optional LangGraph orchestration adapter while keeping the deterministic local workflow as the default runtime.
 
 ## Implemented Capabilities
 
@@ -35,6 +35,7 @@ Step 18 adds document upload support so the frontend can upload local files and 
 - Consistent API error handling for document loading and evaluation failures
 - Request validation for empty query, document, and evaluation inputs
 - Document upload API and frontend upload workflow
+- Optional LangGraph workflow adapter with CLI, API, and frontend orchestration selection
 
 ## Planned Capabilities
 

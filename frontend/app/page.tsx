@@ -20,6 +20,8 @@ type QueryResponse = {
   metrics: Record<string, string | number>;
 };
 
+type Orchestrator = "auto" | "local" | "langgraph";
+
 type UploadResponse = {
   filename: string;
   document_path: string;
@@ -90,6 +92,7 @@ export default function Home() {
   const [evaluation, setEvaluation] = useState<EvalReport | null>(null);
   const [events, setEvents] = useState<string[]>([]);
   const [mode, setMode] = useState<"query" | "stream">("query");
+  const [orchestrator, setOrchestrator] = useState<Orchestrator>("auto");
   const [loading, setLoading] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -146,7 +149,7 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ orchestrator }),
       });
       if (!response.ok) {
         throw new Error(await readErrorMessage(response, `Evaluation request failed with ${response.status}`));
@@ -227,7 +230,7 @@ export default function Home() {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ query, document_path: documentPath }),
+      body: JSON.stringify({ query, document_path: documentPath, orchestrator }),
     });
     if (!response.ok) {
       throw new Error(await readErrorMessage(response, `Query request failed with ${response.status}`));
@@ -241,7 +244,7 @@ export default function Home() {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ query, document_path: documentPath }),
+      body: JSON.stringify({ query, document_path: documentPath, orchestrator }),
     });
     if (!response.ok || !response.body) {
       throw new Error(await readErrorMessage(response, `Stream request failed with ${response.status}`));
@@ -349,6 +352,13 @@ export default function Home() {
             </button>
           </div>
           {uploadStatus && <div className="uploadStatus">{uploadStatus}</div>}
+
+          <label htmlFor="orchestrator">Orchestrator</label>
+          <select id="orchestrator" value={orchestrator} onChange={(event) => setOrchestrator(event.target.value as Orchestrator)}>
+            <option value="auto">Auto</option>
+            <option value="local">Local deterministic</option>
+            <option value="langgraph">LangGraph</option>
+          </select>
 
           <label htmlFor="query">Question</label>
           <textarea id="query" value={query} onChange={(event) => updateQuery(event.target.value)} rows={7} />

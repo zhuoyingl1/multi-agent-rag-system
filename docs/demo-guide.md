@@ -8,6 +8,7 @@ This guide summarizes the runnable demo paths and expected outputs for the Multi
 - Markdown-aware chunking for prose, code, formulas, and tables
 - Local hybrid retrieval with keyword, vector-like, and entity expansion signals
 - Deterministic planner, coordinator, specialist, grounding judge, and summarizer agents
+- Optional LangGraph adapter for production-style state graph orchestration
 - Grounded answer formatting with evidence, sources, and unsupported-claim reporting
 - Evidence sufficiency fallback for unsupported or low-evidence queries
 - FastAPI query, streaming, health, metrics, integration readiness, and evaluation endpoints
@@ -49,6 +50,20 @@ Ask a grounded question:
 
 ```powershell
 python -m multi_agent_rag ask "How does RAG reduce hallucination?"
+```
+
+Force the default local orchestrator explicitly:
+
+```powershell
+python -m multi_agent_rag ask "How does RAG reduce hallucination?" --orchestrator local
+```
+
+Use the optional LangGraph adapter after installing production dependencies and setting configuration:
+
+```powershell
+python -m pip install -e ".[production]"
+$env:ENABLE_LANGGRAPH = "true"
+python -m multi_agent_rag ask "How does RAG reduce hallucination?" --orchestrator langgraph
 ```
 
 Expected answer shape:
@@ -153,7 +168,8 @@ Sample `/query` request:
 ```json
 {
   "query": "How does RAG reduce hallucination?",
-  "document_path": "examples/sample_docs.md"
+  "document_path": "examples/sample_docs.md",
+  "orchestrator": "local"
 }
 ```
 
@@ -201,6 +217,7 @@ http://127.0.0.1:3000
 Demo checks:
 
 - Upload a supported document and confirm the `Document path` field updates.
+- Switch `Orchestrator` between `Auto` and `Local deterministic` for the local demo.
 - Run `Query` mode and inspect the final grounded answer.
 - Run `Stream` mode and watch `answer_delta` events render progressively.
 - Inspect source snippets and retrieval highlights.

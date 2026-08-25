@@ -115,14 +115,18 @@ class MultiAgentRAGWorkflow:
         )
 
     def _has_enough_evidence(self, query: str, sources: list[SearchResult]) -> bool:
-        if not sources:
-            return False
-        query_terms = [term for term in tokenize(query) if term not in EVIDENCE_STOPWORDS]
-        if not query_terms:
-            return False
+        return has_enough_evidence(query, sources)
 
-        source_text = " ".join(source.chunk.text for source in sources).lower()
-        matched_terms = {term for term in query_terms if term in source_text}
-        min_required = 1 if len(set(query_terms)) <= 2 else 2
-        coverage = len(matched_terms) / max(1, len(set(query_terms)))
-        return len(matched_terms) >= min_required and coverage >= 0.2
+
+def has_enough_evidence(query: str, sources: list[SearchResult]) -> bool:
+    if not sources:
+        return False
+    query_terms = [term for term in tokenize(query) if term not in EVIDENCE_STOPWORDS]
+    if not query_terms:
+        return False
+
+    source_text = " ".join(source.chunk.text for source in sources).lower()
+    matched_terms = {term for term in query_terms if term in source_text}
+    min_required = 1 if len(set(query_terms)) <= 2 else 2
+    coverage = len(matched_terms) / max(1, len(set(query_terms)))
+    return len(matched_terms) >= min_required and coverage >= 0.2

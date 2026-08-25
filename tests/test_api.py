@@ -35,12 +35,21 @@ def test_cors_allows_local_frontend() -> None:
 def test_query_endpoint_returns_grounded_answer() -> None:
     client = TestClient(build_app())
 
-    response = client.post("/query", json={"query": "How does RAG reduce hallucination?"})
+    response = client.post("/query", json={"query": "How does RAG reduce hallucination?", "orchestrator": "local"})
 
     assert response.status_code == 200
     data = response.json()
     assert "Answer:" in data["answer"]
     assert data["metrics"]["retrieved_sources"] >= 1
+    assert data["metrics"]["mode"] == "deterministic_local"
+
+
+def test_query_endpoint_rejects_invalid_orchestrator() -> None:
+    client = TestClient(build_app())
+
+    response = client.post("/query", json={"query": "How does RAG reduce hallucination?", "orchestrator": "invalid"})
+
+    assert response.status_code == 422
 
 
 def test_query_endpoint_returns_fallback_for_insufficient_evidence() -> None:
