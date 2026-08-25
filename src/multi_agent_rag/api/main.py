@@ -7,11 +7,12 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from multi_agent_rag.documents import load_document
-from multi_agent_rag.models import SearchResult, WorkflowResult
+from multi_agent_rag.models import AgentResult, SearchResult, WorkflowResult
 from multi_agent_rag.observability import metrics_registry
 from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.hybrid import HybridRetriever
@@ -29,6 +30,13 @@ class QueryRequest(BaseModel):
 
 def build_app() -> FastAPI:
     app = FastAPI(title="Multi-Agent RAG System V2", version="0.1.0")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -55,7 +63,7 @@ def build_app() -> FastAPI:
             metrics_registry.record_run(result.metrics)
             yield _sse("planning", {"selected_agents": result.plan.selected_agents, "tasks": result.plan.tasks})
             yield _sse("retrieval", {"count": len(result.sources), "sources": [source_payload(source) for source in result.sources]})
-            yield _sse("agents", {"agents": [agent.__dict__ for agent in result.agents]})
+            yield _sse("agents", {"agents": [agent_payload(agent) for agent in result.agents]})
             yield _sse("judge", result.grounding.__dict__)
             yield _sse("final", workflow_payload(result))
 
@@ -76,10 +84,21 @@ def workflow_payload(result: WorkflowResult) -> dict[str, Any]:
         "query": result.query,
         "answer": result.answer,
         "plan": result.plan.__dict__,
-        "agents": [agent.__dict__ for agent in result.agents],
+        "agents": [agent_payload(agent) for agent in result.agents],
         "grounding": result.grounding.__dict__,
         "sources": [source_payload(source) for source in result.sources],
         "metrics": result.metrics,
+    }
+
+
+def agent_payload(agent: AgentResult) -> dict[str, Any]:
+    return {
+        "agent_name": agent.agent_name,
+        "task": agent.task,
+        "content": agent.content,
+        "confidence": agent.confidence,
+        "sources": [source_payload(source) for source in agent.sources],
+        "error": agent.error,
     }
 
 

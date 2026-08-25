@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 7 improves the final answer format so CLI and API responses start with a direct grounded answer, followed by agent analysis, evidence, grounding details, and sources.
+Step 8 adds a local Next.js console for querying documents, viewing grounded answers, inspecting sources, checking metrics, and exercising the SSE query endpoint.
 
 ## Implemented Capabilities
 
@@ -24,6 +24,7 @@ Step 7 improves the final answer format so CLI and API responses start with a di
 - Direct answer formatting for project-style and evidence-backed questions
 - FastAPI application with `/health`, `/health/metrics`, `/query`, and `/query/stream`
 - In-memory metrics registry for local observability
+- Next.js console for query, streaming, metrics, and source inspection
 
 ## Planned Capabilities
 
@@ -40,7 +41,15 @@ python -m multi_agent_rag --help
 python -m multi_agent_rag plan
 python -m multi_agent_rag ingest examples/sample_docs.md
 python -m multi_agent_rag ask "How does RAG reduce hallucination?"
-uvicorn multi_agent_rag.api.main:app --reload --app-dir src
+python -m uvicorn multi_agent_rag.api.main:app --reload --app-dir src
+```
+
+Run the frontend in a second terminal:
+
+```powershell
+cd frontend
+npm install
+npm run dev
 ```
 
 ## Project Layout
