@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -44,7 +45,7 @@ def load_document(path: str | Path) -> Document:
 
     return Document(
         title=document_path.name,
-        text=text,
+        text=_normalize_document_text(text),
         metadata={
             "source_path": str(document_path),
             "document_type": document_type,
@@ -106,18 +107,51 @@ def _read_pdf(path: Path) -> str:
 
 
 def _normalize_extracted_text(text: str) -> str:
+    text = _normalize_document_text(text)
+    text = re.sub(r"([A-Za-z])-\n([A-Za-z])", r"\1\2", text)
+    text = re.sub(r"(?<![\n:])\n(?!\n|[-*] |\d+\. |\|)", " ", text)
+    return _collapse_blank_lines(text)
+
+
+def _normalize_document_text(text: str) -> str:
     replacements = {
+        "\ufeff": "",
         "\u00a0": " ",
+        "\u200b": "",
+        "\u200c": "",
+        "\u200d": "",
+        "\u2060": "",
         "\uf020": " ",
         "\uf06c": "- ",
         "\uf0b7": "- ",
         "\u2022": "- ",
         "\u25cf": "- ",
         "\ufffd": "",
+        "\ufb00": "ff",
+        "\ufb01": "fi",
+        "\ufb02": "fl",
+        "\ufb03": "ffi",
+        "\ufb04": "ffl",
     }
     for source, target in replacements.items():
         text = text.replace(source, target)
 
+    text = "".join(_clean_character(character) for character in unicodedata.normalize("NFKC", text))
+    return _collapse_blank_lines(text)
+
+
+def _clean_character(character: str) -> str:
+    if character in {"\n", "\t"}:
+        return character
+    category = unicodedata.category(character)
+    if category.startswith("C"):
+        return ""
+    if category == "Co":
+        return ""
+    return character
+
+
+def _collapse_blank_lines(text: str) -> str:
     lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
     normalized_lines: list[str] = []
     blank_seen = False

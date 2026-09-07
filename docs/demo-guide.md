@@ -5,6 +5,7 @@ This guide summarizes the runnable demo paths and expected outputs for the Multi
 ## What This Project Demonstrates
 
 - Structured document ingestion for Markdown, text, JSON, CSV, and extractable PDF files
+- Shared text normalization for noisy extracted content, Unicode artifacts, ligatures, and PDF line wrapping
 - Markdown-aware chunking for prose, code, formulas, and tables
 - Local hybrid retrieval with keyword, vector-like, and entity expansion signals
 - External Qdrant retrieval for production-style vector index persistence

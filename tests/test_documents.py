@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from multi_agent_rag.documents import _normalize_extracted_text, load_document
+from multi_agent_rag.documents import _normalize_document_text, _normalize_extracted_text, load_document
 
 
 def test_load_markdown_document(tmp_path) -> None:
@@ -55,3 +55,36 @@ def test_normalize_extracted_text_cleans_pdf_artifacts() -> None:
     assert "\ufffd" not in normalized
     assert "Skills - RAG systems" in normalized
     assert "\n\n\n" not in normalized
+
+
+def test_normalize_document_text_removes_common_encoding_artifacts() -> None:
+    text = "\ufeffRAG\u200b uses \ufb01ne-grained retrieval.\nPrivate\ue000 marker.\nBad\ufffd char."
+
+    normalized = _normalize_document_text(text)
+
+    assert "\ufeff" not in normalized
+    assert "\u200b" not in normalized
+    assert "\ue000" not in normalized
+    assert "\ufffd" not in normalized
+    assert "fine-grained retrieval" in normalized
+    assert "Private marker." in normalized
+
+
+def test_normalize_extracted_text_repairs_pdf_line_wrapping() -> None:
+    text = "Retrieval aug-\nmented generation\nuses source evidence.\n\n- Grounding remains visible."
+
+    normalized = _normalize_extracted_text(text)
+
+    assert "augmented generation uses source evidence." in normalized
+    assert "- Grounding remains visible." in normalized
+    assert "aug-\nmented" not in normalized
+
+
+def test_load_text_document_applies_shared_normalization(tmp_path) -> None:
+    path = tmp_path / "notes.txt"
+    path.write_text("RAG\u00a0systems use \ufb02exible retrieval.\ufffd", encoding="utf-8")
+
+    document = load_document(path)
+
+    assert "RAG systems use flexible retrieval." in document.text
+    assert "\ufffd" not in document.text
