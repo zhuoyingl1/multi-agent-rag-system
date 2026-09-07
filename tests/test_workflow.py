@@ -40,6 +40,9 @@ def test_workflow_returns_grounded_answer() -> None:
     assert result.metrics["evidence_status"] == "sufficient"
     assert result.metrics["mode"] == "deterministic_local"
     assert result.metrics["reranker"] == "none"
+    assert result.metrics["answer_type"] == "deterministic"
+    assert result.metrics["answer_model"] == "template"
+    assert result.metrics["answer_error"] == ""
 
 
 def test_workflow_reports_reranker_metrics() -> None:
@@ -67,6 +70,7 @@ def test_workflow_uses_fallback_for_insufficient_evidence() -> None:
     assert result.metrics["retrieved_sources"] == 0
     assert result.metrics["candidate_sources"] >= 0
     assert result.metrics["evidence_status"] == "insufficient"
+    assert result.metrics["answer_type"] == "deterministic"
     assert "No sufficiently relevant retrieved evidence" in result.answer
 
 

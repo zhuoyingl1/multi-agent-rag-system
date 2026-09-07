@@ -18,5 +18,7 @@ def test_cli_integrations_json_output(capsys) -> None:
 
     report = json.loads(capsys.readouterr().out)
     assert exit_code == 0
-    assert report["integration_count"] == 5
+    integration_names = {item["name"] for item in report["integrations"]}
+    assert report["integration_count"] == 6
     assert report["integrations"][0]["name"] == "local_hybrid_store"
+    assert "llm_answer" in integration_names

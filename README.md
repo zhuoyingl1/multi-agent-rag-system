@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 24 improves ingestion quality with shared text normalization for noisy extracted documents.
+Step 25 adds an optional local Ollama answer composer for source-grounded natural-language answers.
 
 ## Implemented Capabilities
 
@@ -41,6 +41,7 @@ Step 24 improves ingestion quality with shared text normalization for noisy extr
 - Qdrant retrieval adapter and retrieval backend factory for production vector search
 - Neo4j graph adapter for document chunk and entity relationship indexing
 - Configurable reranking wrapper for local, Qdrant, and BGE-style candidate reranking
+- Optional local Ollama answer composer with answer provider metrics
 
 ## Planned Capabilities
 
@@ -59,6 +60,15 @@ python -m multi_agent_rag ask "How does RAG reduce hallucination?"
 python -m multi_agent_rag eval --output output/eval-report.json
 python -m multi_agent_rag integrations
 python -m uvicorn multi_agent_rag.api.main:app --reload --app-dir src
+```
+
+Enable local LLM answer composition with Ollama:
+
+```powershell
+$env:LLM_ANSWER_PROVIDER = "ollama"
+$env:LLM_ANSWER_MODEL = "qwen2.5:3b"
+$env:OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+python -m multi_agent_rag ask "How does RAG reduce hallucination?" --retrieval-backend local
 ```
 
 Run the frontend in a second terminal:

@@ -172,9 +172,11 @@ def test_integrations_endpoint_returns_readiness() -> None:
 
     assert response.status_code == 200
     data = response.json()
-    assert data["integration_count"] == 5
+    integration_names = {item["name"] for item in data["integrations"]}
+    assert data["integration_count"] == 6
     assert data["integrations"][0]["name"] == "local_hybrid_store"
     assert data["integrations"][0]["status"] == "ready"
+    assert "llm_answer" in integration_names
 
 
 def test_evaluate_endpoint_returns_report() -> None:

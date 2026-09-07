@@ -14,6 +14,7 @@ This guide summarizes the runnable demo paths and expected outputs for the Multi
 - LangGraph adapter for production-style state graph orchestration
 - Grounded answer formatting with evidence, sources, and unsupported-claim reporting
 - Evidence sufficiency fallback for unsupported or low-evidence queries
+- Optional local Ollama answer composition for source-grounded natural-language answers
 - FastAPI query, streaming, health, metrics, integration readiness, and evaluation endpoints
 - Next.js console for document queries, streaming answers, sources, metrics, integrations, and evaluation
 - Deterministic evaluation runner for local regression testing
@@ -31,7 +32,7 @@ python -m pytest -q
 Expected test result:
 
 ```text
-67 passed
+75 passed
 ```
 
 The exact runtime can vary by machine.
@@ -108,6 +109,21 @@ python -m multi_agent_rag ask "How does RAG reduce hallucination?" --retrieval-b
 ```
 
 When reranking is enabled, metrics include `reranker` and `candidate_sources`, and returned source items use the `reranked` retrieval type.
+
+Enable local Ollama answer composition:
+
+```powershell
+ollama pull qwen2.5:3b
+$env:LLM_ANSWER_PROVIDER = "ollama"
+$env:LLM_ANSWER_MODEL = "qwen2.5:3b"
+$env:OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+python -m multi_agent_rag ask "How does RAG reduce hallucination?" --retrieval-backend local
+Remove-Item Env:LLM_ANSWER_PROVIDER
+Remove-Item Env:LLM_ANSWER_MODEL
+Remove-Item Env:OLLAMA_BASE_URL
+```
+
+When Ollama answer composition is enabled, metrics include `answer_type=llm` and `answer_model=qwen2.5:3b`. If the provider fails and `LLM_ANSWER_REQUIRED=false`, the workflow uses the deterministic answer fallback and records `answer_type=deterministic_fallback`.
 
 Index a document into Neo4j and inspect graph-expanded entities:
 
@@ -194,10 +210,11 @@ local_hybrid_store: ready
 qdrant: ready
 neo4j: ready
 bge_reranker: missing_config
+llm_answer: missing_config
 langgraph: ready
 ```
 
-The exact ready count depends on installed packages and environment variables. Qdrant and Neo4j are configured by default through `docker-compose.yml`; BGE reranking becomes ready after `RERANKER_MODEL` is set and `sentence-transformers` is installed.
+The exact ready count depends on installed packages and environment variables. Qdrant and Neo4j are configured by default through `docker-compose.yml`; BGE reranking becomes ready after `RERANKER_MODEL` is set and `sentence-transformers` is installed. Local LLM answer composition becomes ready after `LLM_ANSWER_PROVIDER=ollama` and `LLM_ANSWER_MODEL` are set.
 
 ## API Demo
 
@@ -302,5 +319,6 @@ Demo checks:
 - Local vector retrieval is vector-like lexical scoring, not a learned embedding model.
 - Qdrant and Neo4j require Docker services for the production-style path.
 - BGE reranking requires `sentence-transformers` and model download access when using a real model name.
+- Ollama answer composition requires a running local Ollama service and an available model.
 - PDF ingestion depends on extractable text and does not perform OCR.
 - The deterministic judge uses lexical overlap and should be replaced or augmented with an LLM judge for production evaluation.

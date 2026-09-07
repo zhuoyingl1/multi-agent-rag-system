@@ -1,6 +1,8 @@
+import pytest
+
 from multi_agent_rag.agents.experts import ExpertAgent
-from multi_agent_rag.agents.summarizer import SummarizerAgent
-from multi_agent_rag.models import Document, JudgeResult
+from multi_agent_rag.agents.summarizer import OllamaAnswerComposer, SummarizerAgent, create_answer_composer
+from multi_agent_rag.models import AgentResult, Document, JudgeResult
 from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.hybrid import HybridRetriever
 from multi_agent_rag.workflow import MultiAgentRAGWorkflow
@@ -67,3 +69,96 @@ def test_summarizer_lists_unsupported_claims() -> None:
     )
 
     assert "Unsupported claims: No evidence" in answer
+
+
+def test_ollama_answer_composer_returns_chat_content(monkeypatch) -> None:
+    document = Document(title="rag.md", text="RAG answers should use retrieved evidence and avoid unsupported claims.")
+    retriever = HybridRetriever()
+    retriever.index(chunk_document(document))
+    sources = retriever.retrieve("How should RAG answer questions?", top_k=3)
+    composer = OllamaAnswerComposer(model="qwen2.5:3b", base_url="http://127.0.0.1:11434")
+    captured_payload = {}
+
+    def fake_post(path, payload):
+        captured_payload["path"] = path
+        captured_payload["payload"] = payload
+        return {"message": {"content": "RAG should answer from retrieved evidence and avoid unsupported claims."}}
+
+    monkeypatch.setattr(composer, "_post_json", fake_post)
+
+    answer = composer.compose(
+        "How should RAG answer questions?",
+        [AgentResult("retrieval", "task", "Evidence was retrieved.", 0.9, sources=sources)],
+        sources,
+    )
+
+    assert answer == "RAG should answer from retrieved evidence and avoid unsupported claims."
+    assert captured_payload["path"] == "/api/chat"
+    assert captured_payload["payload"]["model"] == "qwen2.5:3b"
+    assert captured_payload["payload"]["stream"] is False
+
+
+def test_create_answer_composer_supports_ollama(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_ANSWER_PROVIDER", "ollama")
+    monkeypatch.setenv("LLM_ANSWER_MODEL", "qwen2.5:3b")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+    monkeypatch.setenv("LLM_ANSWER_TIMEOUT_SECONDS", "30")
+    monkeypatch.setenv("LLM_ANSWER_MAX_TOKENS", "128")
+
+    composer = create_answer_composer()
+
+    assert isinstance(composer, OllamaAnswerComposer)
+    assert composer.model == "qwen2.5:3b"
+    assert composer.base_url == "http://127.0.0.1:11434"
+    assert composer.timeout_seconds == 30
+    assert composer.max_tokens == 128
+
+
+def test_summarizer_records_fallback_when_optional_ollama_fails(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_ANSWER_REQUIRED", "false")
+    document = Document(title="rag.md", text="RAG answers should use retrieved evidence.")
+    retriever = HybridRetriever()
+    retriever.index(chunk_document(document))
+    sources = retriever.retrieve("How should RAG answer?", top_k=3)
+    composer = OllamaAnswerComposer(model="qwen2.5:3b")
+
+    def fail_post(_path, _payload):
+        raise TimeoutError("slow local model")
+
+    monkeypatch.setattr(composer, "_post_json", fail_post)
+    summarizer = SummarizerAgent(answer_composer=composer)
+
+    answer = summarizer.summarize(
+        query="How should RAG answer?",
+        agent_results=[AgentResult("retrieval", "task", "Evidence was retrieved.", 0.9, sources=sources)],
+        judge=JudgeResult(score=1.0, reason="Grounded."),
+        sources=sources,
+    )
+
+    assert "The strongest retrieved match" in answer
+    assert summarizer.answer_type == "deterministic_fallback"
+    assert summarizer.answer_model == "qwen2.5:3b"
+    assert "slow local model" in summarizer.answer_error
+
+
+def test_summarizer_raises_when_required_ollama_fails(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_ANSWER_REQUIRED", "true")
+    document = Document(title="rag.md", text="RAG answers should use retrieved evidence.")
+    retriever = HybridRetriever()
+    retriever.index(chunk_document(document))
+    sources = retriever.retrieve("How should RAG answer?", top_k=3)
+    composer = OllamaAnswerComposer(model="qwen2.5:3b")
+
+    def fail_post(_path, _payload):
+        raise TimeoutError("slow local model")
+
+    monkeypatch.setattr(composer, "_post_json", fail_post)
+    summarizer = SummarizerAgent(answer_composer=composer)
+
+    with pytest.raises(RuntimeError, match="LLM answer provider unavailable"):
+        summarizer.summarize(
+            query="How should RAG answer?",
+            agent_results=[AgentResult("retrieval", "task", "Evidence was retrieved.", 0.9, sources=sources)],
+            judge=JudgeResult(score=1.0, reason="Grounded."),
+            sources=sources,
+        )

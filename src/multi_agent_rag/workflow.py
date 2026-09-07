@@ -75,6 +75,9 @@ class MultiAgentRAGWorkflow:
                 "mode": "deterministic_local",
                 "evidence_status": "insufficient",
                 "reranker": reranker,
+                "answer_type": self.summarizer.answer_type,
+                "answer_model": self.summarizer.answer_model,
+                "answer_error": self.summarizer.answer_error,
             }
             return WorkflowResult(
                 query=query,
@@ -107,6 +110,9 @@ class MultiAgentRAGWorkflow:
             "mode": "deterministic_local",
             "evidence_status": "sufficient",
             "reranker": reranker,
+            "answer_type": self.summarizer.answer_type,
+            "answer_model": self.summarizer.answer_model,
+            "answer_error": self.summarizer.answer_error,
         }
         return WorkflowResult(
             query=query,

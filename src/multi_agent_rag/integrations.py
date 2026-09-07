@@ -18,6 +18,9 @@ class IntegrationConfig:
     neo4j_user: str | None = "neo4j"
     neo4j_database: str | None = "neo4j"
     reranker_model: str | None = None
+    llm_answer_provider: str | None = None
+    llm_answer_model: str | None = None
+    ollama_base_url: str | None = "http://127.0.0.1:11434"
 
     @classmethod
     def from_env(cls) -> "IntegrationConfig":
@@ -28,6 +31,9 @@ class IntegrationConfig:
             neo4j_user=os.getenv("NEO4J_USER") or "neo4j",
             neo4j_database=os.getenv("NEO4J_DATABASE") or "neo4j",
             reranker_model=os.getenv("RERANKER_MODEL"),
+            llm_answer_provider=os.getenv("LLM_ANSWER_PROVIDER"),
+            llm_answer_model=os.getenv("LLM_ANSWER_MODEL"),
+            ollama_base_url=os.getenv("OLLAMA_BASE_URL") or "http://127.0.0.1:11434",
         )
 
 
@@ -87,6 +93,7 @@ def check_integrations(config: IntegrationConfig | None = None) -> IntegrationRe
             config_note="Set NEO4J_URI and NEO4J_USER to enable this path.",
         ),
         _reranker_status(current.reranker_model),
+        _llm_answer_status(current.llm_answer_provider, current.llm_answer_model, current.ollama_base_url),
         _status(
             name="langgraph",
             role="Production multi-agent orchestration graph",
@@ -97,8 +104,14 @@ def check_integrations(config: IntegrationConfig | None = None) -> IntegrationRe
     ]
     ready_count = len([status for status in statuses if status.status == "ready"])
     reranker_status = next(status for status in statuses if status.name == "bge_reranker")
+    llm_answer_status = next(status for status in statuses if status.name == "llm_answer")
     production_reranker_ready = reranker_status.status == "ready" and reranker_status.required_package == "sentence_transformers"
-    mode = "production_ready" if ready_count == len(statuses) and production_reranker_ready else "local_with_optional_integrations"
+    production_answer_ready = llm_answer_status.status == "ready"
+    mode = (
+        "production_ready"
+        if ready_count == len(statuses) and production_reranker_ready and production_answer_ready
+        else "local_with_optional_integrations"
+    )
     return IntegrationReport(
         mode=mode,
         ready_count=ready_count,
@@ -157,4 +170,33 @@ def _reranker_status(model_name: str | None) -> IntegrationStatus:
         required_package="sentence_transformers",
         configured=True,
         config_note="Set RERANKER_MODEL to enable this path.",
+    )
+
+
+def _llm_answer_status(provider: str | None, model_name: str | None, ollama_base_url: str | None) -> IntegrationStatus:
+    role = "LLM answer composition from retrieved evidence"
+    selected = (provider or "").lower()
+    if selected == "ollama":
+        configured = bool(model_name)
+        return IntegrationStatus(
+            name="llm_answer",
+            role=role,
+            status="ready" if configured else "missing_config",
+            required_package=None,
+            configured=configured,
+            package_available=True,
+            notes=(
+                f"Configured for local Ollama model {model_name} at {ollama_base_url}."
+                if configured
+                else "Set LLM_ANSWER_MODEL to enable the Ollama answer path."
+            ),
+        )
+    return IntegrationStatus(
+        name="llm_answer",
+        role=role,
+        status="missing_config",
+        required_package=None,
+        configured=False,
+        package_available=True,
+        notes="Set LLM_ANSWER_PROVIDER=ollama and LLM_ANSWER_MODEL to enable this path.",
     )

@@ -5,13 +5,14 @@ def test_check_integrations_reports_local_ready() -> None:
     report = check_integrations(IntegrationConfig())
     statuses = {item.name: item for item in report.integrations}
 
-    assert report.integration_count == 5
+    assert report.integration_count == 6
     assert statuses["local_hybrid_store"].status == "ready"
     assert statuses["qdrant"].status in {"ready", "missing_package"}
     assert statuses["qdrant"].configured is True
     assert statuses["neo4j"].status in {"ready", "missing_package"}
     assert statuses["neo4j"].configured is True
     assert statuses["bge_reranker"].status == "missing_config"
+    assert statuses["llm_answer"].status == "missing_config"
     assert statuses["langgraph"].status in {"ready", "missing_package"}
     assert statuses["langgraph"].configured is True
 
@@ -32,3 +33,19 @@ def test_check_integrations_reports_local_reranker_ready() -> None:
     assert statuses["bge_reranker"].required_package is None
     assert statuses["bge_reranker"].configured is True
     assert report.mode == "local_with_optional_integrations"
+
+
+def test_check_integrations_reports_ollama_answer_ready() -> None:
+    report = check_integrations(
+        IntegrationConfig(
+            llm_answer_provider="ollama",
+            llm_answer_model="qwen2.5:3b",
+            ollama_base_url="http://127.0.0.1:11434",
+        )
+    )
+    statuses = {item.name: item for item in report.integrations}
+
+    assert statuses["llm_answer"].status == "ready"
+    assert statuses["llm_answer"].configured is True
+    assert statuses["llm_answer"].required_package is None
+    assert "Ollama" in statuses["llm_answer"].notes
