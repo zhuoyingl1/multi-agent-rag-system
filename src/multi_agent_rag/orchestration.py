@@ -18,7 +18,13 @@ class WorkflowRunner(Protocol):
         """Run a query through the selected workflow."""
 
 
-def create_workflow(retriever: Retriever, top_k: int = 5, orchestrator: str | None = None) -> WorkflowRunner:
+def create_workflow(
+    retriever: Retriever,
+    top_k: int = 5,
+    orchestrator: str | None = None,
+    require_llm_answer: bool = False,
+    default_answer_provider: str | None = None,
+) -> WorkflowRunner:
     selected = (orchestrator or os.getenv("RAG_ORCHESTRATOR") or "auto").lower()
     if selected not in {"auto", "local", "langgraph"}:
         raise ValueError("Workflow orchestrator must be one of: auto, local, langgraph")
@@ -28,11 +34,21 @@ def create_workflow(retriever: Retriever, top_k: int = 5, orchestrator: str | No
         if _langgraph_available():
             from multi_agent_rag.langgraph_workflow import LangGraphRAGWorkflow
 
-            return LangGraphRAGWorkflow(retriever, top_k=top_k)
+            return LangGraphRAGWorkflow(
+                retriever,
+                top_k=top_k,
+                require_llm_answer=require_llm_answer,
+                default_answer_provider=default_answer_provider,
+            )
         if selected == "langgraph":
             raise RuntimeError("LangGraph orchestrator requested, but the 'langgraph' package is not installed.")
 
-    return MultiAgentRAGWorkflow(retriever, top_k=top_k)
+    return MultiAgentRAGWorkflow(
+        retriever,
+        top_k=top_k,
+        require_llm_answer=require_llm_answer,
+        default_answer_provider=default_answer_provider,
+    )
 
 
 def _langgraph_available() -> bool:

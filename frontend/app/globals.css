@@ -105,6 +105,8 @@ h2 {
 .answerPanel {
   padding: 18px;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .sectionHeader {
@@ -218,17 +220,30 @@ textarea:focus {
 }
 
 .answerText {
-  height: calc(100% - 42px);
+  flex: 1;
   min-height: 460px;
   margin: 0;
-  padding: 16px;
+  padding: 22px;
   overflow: auto;
   white-space: pre-wrap;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #101817;
-  color: #ecfdf5;
-  line-height: 1.55;
+  background: #fbfcfb;
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.75;
+}
+
+.answerWarning {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  background: #fff7ed;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
 }
 
 .emptyState,
@@ -257,7 +272,7 @@ textarea:focus {
 .metricStrip {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -373,7 +388,7 @@ textarea:focus {
 
 .integrationList {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 10px;
   margin-top: 12px;
 }

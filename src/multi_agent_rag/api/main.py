@@ -38,6 +38,7 @@ class QueryRequest(BaseModel):
     document_path: str = Field(default=str(DEFAULT_DOCUMENT_PATH), min_length=1)
     orchestrator: str = Field(default="auto", pattern="^(auto|local|langgraph)$")
     retrieval_backend: str = Field(default="qdrant", pattern="^(local|qdrant)$")
+    require_llm_answer: bool = True
 
 
 class EvaluationRequest(BaseModel):
@@ -62,7 +63,12 @@ def build_app() -> FastAPI:
     app = FastAPI(title="Multi-Agent RAG System V2", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+        allow_origins=[
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:3001",
+            "http://127.0.0.1:3001",
+        ],
         allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
@@ -100,13 +106,25 @@ def build_app() -> FastAPI:
 
     @app.post("/query")
     def query(request: QueryRequest) -> dict[str, Any]:
-        result = safe_run_query(request.query, Path(request.document_path), request.orchestrator, request.retrieval_backend)
+        result = safe_run_query(
+            request.query,
+            Path(request.document_path),
+            request.orchestrator,
+            request.retrieval_backend,
+            request.require_llm_answer,
+        )
         metrics_registry.record_run(result.metrics)
         return workflow_payload(result)
 
     @app.post("/query/stream")
     def query_stream(request: QueryRequest) -> StreamingResponse:
-        result = safe_run_query(request.query, Path(request.document_path), request.orchestrator, request.retrieval_backend)
+        result = safe_run_query(
+            request.query,
+            Path(request.document_path),
+            request.orchestrator,
+            request.retrieval_backend,
+            request.require_llm_answer,
+        )
         metrics_registry.record_run(result.metrics)
 
         def events():
@@ -129,12 +147,18 @@ def run_query(
     document_path: Path,
     orchestrator: str | None = None,
     retrieval_backend: str | None = None,
+    require_llm_answer: bool = False,
 ) -> WorkflowResult:
     document = load_document(document_path)
     retriever = create_retriever(retrieval_backend)
     retriever.index(chunk_document(document))
     try:
-        return create_workflow(retriever, orchestrator=orchestrator).run(query)
+        return create_workflow(
+            retriever,
+            orchestrator=orchestrator,
+            require_llm_answer=require_llm_answer,
+            default_answer_provider="ollama" if require_llm_answer else None,
+        ).run(query)
     finally:
         close = getattr(retriever, "close", None)
         if callable(close):
@@ -172,9 +196,16 @@ def safe_run_query(
     document_path: Path,
     orchestrator: str | None = None,
     retrieval_backend: str | None = None,
+    require_llm_answer: bool = False,
 ) -> WorkflowResult:
     try:
-        return run_query(query, document_path, orchestrator=orchestrator, retrieval_backend=retrieval_backend)
+        return run_query(
+            query,
+            document_path,
+            orchestrator=orchestrator,
+            retrieval_backend=retrieval_backend,
+            require_llm_answer=require_llm_answer,
+        )
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

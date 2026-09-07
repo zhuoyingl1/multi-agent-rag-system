@@ -46,13 +46,22 @@ EVIDENCE_STOPWORDS = {
 class MultiAgentRAGWorkflow:
     """Coordinate planning, retrieval, specialist analysis, judging, and summarization."""
 
-    def __init__(self, retriever: HybridRetriever, top_k: int = 5) -> None:
+    def __init__(
+        self,
+        retriever: HybridRetriever,
+        top_k: int = 5,
+        require_llm_answer: bool = False,
+        default_answer_provider: str | None = None,
+    ) -> None:
         self.retriever = retriever
         self.top_k = top_k
         self.planner = PlannerAgent()
         self.coordinator = CoordinatorAgent()
         self.judge = GroundingJudge()
-        self.summarizer = SummarizerAgent()
+        self.summarizer = SummarizerAgent(
+            require_llm_answer=require_llm_answer,
+            default_answer_provider=default_answer_provider,
+        )
 
     def run(self, query: str) -> WorkflowResult:
         started = perf_counter()

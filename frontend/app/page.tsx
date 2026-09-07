@@ -97,15 +97,22 @@ export default function Home() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(false);
 
   const sourceCount = result?.sources.length ?? 0;
   const displayedAnswer = result?.answer ?? streamedAnswer;
+  const answerMode = formatAnswerMode(result?.metrics);
+  const answerWarning = formatAnswerWarning(result?.metrics);
+  const uploadDisabled = !hydrated || uploading || !selectedFile;
+  const runDisabled = !hydrated || loading || !query.trim() || !documentPath.trim();
+  const evaluationDisabled = !hydrated || evaluating;
   const groundingScore = useMemo(() => {
     const value = result?.metrics.grounding_score;
     return typeof value === "number" ? value.toFixed(2) : "0.00";
   }, [result]);
 
   useEffect(() => {
+    setHydrated(true);
     void refreshDashboard();
   }, []);
 
@@ -227,7 +234,7 @@ export default function Home() {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ query, document_path: documentPath }),
+      body: JSON.stringify({ query, document_path: documentPath, require_llm_answer: true }),
     });
     if (!response.ok) {
       throw new Error(await readErrorMessage(response, `Query request failed with ${response.status}`));
@@ -241,7 +248,7 @@ export default function Home() {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ query, document_path: documentPath }),
+      body: JSON.stringify({ query, document_path: documentPath, require_llm_answer: true }),
     });
     if (!response.ok || !response.body) {
       throw new Error(await readErrorMessage(response, `Stream request failed with ${response.status}`));
@@ -343,7 +350,7 @@ export default function Home() {
                 setUploadStatus(null);
               }}
             />
-            <button className="secondaryButton uploadButton" type="button" onClick={uploadDocument} disabled={uploading || !selectedFile}>
+            <button className="secondaryButton uploadButton" type="button" onClick={uploadDocument} disabled={uploadDisabled}>
               {uploading ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
               Upload
             </button>
@@ -364,7 +371,7 @@ export default function Home() {
             </button>
           </div>
 
-          <button className="primaryButton" type="submit" disabled={loading || !query.trim() || !documentPath.trim()}>
+          <button className="primaryButton" type="submit" disabled={runDisabled}>
             {loading ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
             Run
           </button>
@@ -378,7 +385,12 @@ export default function Home() {
 
           {error && <div className="errorBox">{error}</div>}
           {!error && !displayedAnswer && <div className="emptyState">Run a query to inspect the grounded answer.</div>}
-          {displayedAnswer && <pre className="answerText">{displayedAnswer}</pre>}
+          {displayedAnswer && (
+            <>
+              <div className="answerText">{displayedAnswer}</div>
+              {answerWarning && <div className="answerWarning">{answerWarning}</div>}
+            </>
+          )}
         </section>
       </section>
 
@@ -386,6 +398,7 @@ export default function Home() {
         <div className="metricStrip">
           <Metric label="Sources" value={sourceCount.toString()} />
           <Metric label="Grounding" value={groundingScore} />
+          <Metric label="Answer mode" value={answerMode} />
           <Metric label="Runs" value={metrics?.run_count.toString() ?? "0"} />
           <Metric label="Avg latency" value={`${metrics?.average_latency_ms.toFixed(2) ?? "0.00"} ms`} />
         </div>
@@ -458,7 +471,7 @@ export default function Home() {
               <span>Default regression set</span>
               <strong>{evaluation ? `${evaluation.passed_count}/${evaluation.case_count} passed` : "Not run"}</strong>
             </div>
-            <button className="secondaryButton" type="button" onClick={runEvaluation} disabled={evaluating}>
+            <button className="secondaryButton" type="button" onClick={runEvaluation} disabled={evaluationDisabled}>
               {evaluating ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
               Run Eval
             </button>
@@ -500,4 +513,25 @@ function Metric({ label, value }: { label: string; value: string }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function formatAnswerMode(metrics: QueryResponse["metrics"] | undefined) {
+  const answerType = typeof metrics?.answer_type === "string" ? metrics.answer_type : "";
+  const answerModel = typeof metrics?.answer_model === "string" ? metrics.answer_model : "";
+  if (!answerType) {
+    return "Not run";
+  }
+  if (answerType === "llm" && answerModel) {
+    return answerModel;
+  }
+  return answerType.replaceAll("_", " ");
+}
+
+function formatAnswerWarning(metrics: QueryResponse["metrics"] | undefined) {
+  const answerType = typeof metrics?.answer_type === "string" ? metrics.answer_type : "";
+  const answerError = typeof metrics?.answer_error === "string" ? metrics.answer_error : "";
+  if (answerType !== "deterministic_fallback" || !answerError) {
+    return "";
+  }
+  return `Fallback answer shown because the LLM answer provider was unavailable: ${answerError}`;
 }

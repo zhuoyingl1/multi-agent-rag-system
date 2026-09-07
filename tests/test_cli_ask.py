@@ -11,6 +11,6 @@ def test_cli_ask_runs_demo(tmp_path, capsys) -> None:
 
     output = capsys.readouterr().out
     assert exit_code == 0
-    assert "Grounding score" in output
+    assert "grounding_score" in output
     assert "Agents:" in output
     assert "Metrics:" in output

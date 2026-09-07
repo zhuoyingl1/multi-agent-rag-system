@@ -32,14 +32,37 @@ def test_cors_allows_local_frontend() -> None:
     assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
 
 
+def test_cors_allows_next_fallback_port() -> None:
+    client = TestClient(build_app())
+
+    response = client.options(
+        "/query",
+        headers={
+            "Origin": "http://localhost:3001",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3001"
+
+
 def test_query_endpoint_returns_grounded_answer() -> None:
     client = TestClient(build_app())
 
-    response = client.post("/query", json={"query": "How does RAG reduce hallucination?", "orchestrator": "local"})
+    response = client.post(
+        "/query",
+        json={
+            "query": "How does RAG reduce hallucination?",
+            "orchestrator": "local",
+            "retrieval_backend": "local",
+            "require_llm_answer": False,
+        },
+    )
 
     assert response.status_code == 200
     data = response.json()
-    assert "Answer:" in data["answer"]
+    assert data["answer"].startswith("Based on the retrieved evidence")
     assert data["metrics"]["retrieved_sources"] >= 1
     assert data["metrics"]["mode"] == "deterministic_local"
     assert data["workflow_trace"]["mode"] == "deterministic_local"
@@ -47,10 +70,37 @@ def test_query_endpoint_returns_grounded_answer() -> None:
     assert data["workflow_trace"]["selected_agents"]
 
 
+def test_query_endpoint_uses_llm_answer_by_default(monkeypatch) -> None:
+    def fake_post(_self, _path, _payload):
+        return {"message": {"content": "RAG reduces hallucination by grounding answers in retrieved evidence."}}
+
+    monkeypatch.setattr("multi_agent_rag.agents.summarizer.OllamaAnswerComposer._post_json", fake_post)
+    client = TestClient(build_app())
+
+    response = client.post(
+        "/query",
+        json={"query": "How does RAG reduce hallucination?", "orchestrator": "local", "retrieval_backend": "local"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["answer"] == "RAG reduces hallucination by grounding answers in retrieved evidence."
+    assert data["metrics"]["answer_type"] == "llm"
+    assert data["metrics"]["answer_model"] == "qwen2.5:3b"
+
+
 def test_query_endpoint_rejects_invalid_orchestrator() -> None:
     client = TestClient(build_app())
 
-    response = client.post("/query", json={"query": "How does RAG reduce hallucination?", "orchestrator": "invalid"})
+    response = client.post(
+        "/query",
+        json={
+            "query": "How does RAG reduce hallucination?",
+            "orchestrator": "invalid",
+            "retrieval_backend": "local",
+            "require_llm_answer": False,
+        },
+    )
 
     assert response.status_code == 422
 
@@ -58,7 +108,10 @@ def test_query_endpoint_rejects_invalid_orchestrator() -> None:
 def test_query_endpoint_rejects_invalid_retrieval_backend() -> None:
     client = TestClient(build_app())
 
-    response = client.post("/query", json={"query": "How does RAG reduce hallucination?", "retrieval_backend": "invalid"})
+    response = client.post(
+        "/query",
+        json={"query": "How does RAG reduce hallucination?", "retrieval_backend": "invalid", "require_llm_answer": False},
+    )
 
     assert response.status_code == 422
 
@@ -66,7 +119,14 @@ def test_query_endpoint_rejects_invalid_retrieval_backend() -> None:
 def test_query_endpoint_returns_fallback_for_insufficient_evidence() -> None:
     client = TestClient(build_app())
 
-    response = client.post("/query", json={"query": "Who won the 1998 world chess championship?"})
+    response = client.post(
+        "/query",
+        json={
+            "query": "Who won the 1998 world chess championship?",
+            "retrieval_backend": "local",
+            "require_llm_answer": False,
+        },
+    )
 
     assert response.status_code == 200
     data = response.json()
@@ -111,7 +171,12 @@ def test_upload_document_returns_queryable_path() -> None:
 
     response = client.post(
         "/query",
-        json={"query": "How does RAG reduce hallucination?", "document_path": uploaded["document_path"]},
+        json={
+            "query": "How does RAG reduce hallucination?",
+            "document_path": uploaded["document_path"],
+            "retrieval_backend": "local",
+            "require_llm_answer": False,
+        },
     )
 
     assert response.status_code == 200
@@ -133,7 +198,10 @@ def test_upload_document_rejects_unsupported_extension() -> None:
 def test_stream_endpoint_returns_all_events() -> None:
     client = TestClient(build_app())
 
-    response = client.post("/query/stream", json={"query": "How does RAG reduce hallucination?"})
+    response = client.post(
+        "/query/stream",
+        json={"query": "How does RAG reduce hallucination?", "retrieval_backend": "local", "require_llm_answer": False},
+    )
 
     assert response.status_code == 200
     body = response.text
@@ -158,7 +226,10 @@ def test_stream_endpoint_returns_bad_request_for_missing_document() -> None:
 def test_metrics_endpoint_updates_after_query() -> None:
     client = TestClient(build_app())
 
-    client.post("/query", json={"query": "How does RAG reduce hallucination?"})
+    client.post(
+        "/query",
+        json={"query": "How does RAG reduce hallucination?", "retrieval_backend": "local", "require_llm_answer": False},
+    )
     response = client.get("/health/metrics")
 
     assert response.status_code == 200

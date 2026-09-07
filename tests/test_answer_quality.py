@@ -28,17 +28,18 @@ def test_expert_selects_query_relevant_sentences() -> None:
     assert "semiconductor operations" not in result.content.lower()
 
 
-def test_summarizer_outputs_structured_sections() -> None:
+def test_summarizer_outputs_direct_answer_only() -> None:
     workflow = MultiAgentRAGWorkflow(HybridRetriever())
     document = Document(title="rag.md", text="RAG reduces hallucination by grounding answers in source evidence.")
     workflow.retriever.index(chunk_document(document))
 
     result = workflow.run("How does RAG reduce hallucination?")
 
-    assert "Answer:" in result.answer
-    assert "Evidence:" in result.answer
-    assert "Unsupported claims:" in result.answer
-    assert "Sources:" in result.answer
+    assert result.answer.startswith("Based on the retrieved evidence")
+    assert "Question:" not in result.answer
+    assert "Analysis:" not in result.answer
+    assert "Evidence:" not in result.answer
+    assert "Grounding score:" not in result.answer
 
 
 def test_summarizer_starts_with_direct_project_answer() -> None:
@@ -55,9 +56,9 @@ def test_summarizer_starts_with_direct_project_answer() -> None:
 
     result = workflow.run("Which resume projects mention RAG, FastAPI, Next.js, LangGraph, Qdrant, or Neo4j?")
 
-    assert "Answer:\nThe strongest retrieved match is Multi-Agent RAG System" in result.answer
+    assert result.answer.startswith("The strongest retrieved match is Multi-Agent RAG System")
     assert "supported by evidence mentioning" in result.answer
-    assert "Analysis:" in result.answer
+    assert "Analysis:" not in result.answer
 
 
 def test_summarizer_lists_unsupported_claims() -> None:
@@ -68,7 +69,7 @@ def test_summarizer_lists_unsupported_claims() -> None:
         sources=[],
     )
 
-    assert "Unsupported claims: No evidence" in answer
+    assert "No sufficiently relevant retrieved evidence" in answer
 
 
 def test_ollama_answer_composer_returns_chat_content(monkeypatch) -> None:
@@ -135,7 +136,7 @@ def test_summarizer_records_fallback_when_optional_ollama_fails(monkeypatch) -> 
         sources=sources,
     )
 
-    assert "The strongest retrieved match" in answer
+    assert answer.startswith("Based on the retrieved evidence")
     assert summarizer.answer_type == "deterministic_fallback"
     assert summarizer.answer_model == "qwen2.5:3b"
     assert "slow local model" in summarizer.answer_error

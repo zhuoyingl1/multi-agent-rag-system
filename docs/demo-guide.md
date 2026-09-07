@@ -12,9 +12,9 @@ This guide summarizes the runnable demo paths and expected outputs for the Multi
 - Neo4j graph indexing for chunk and entity relationships
 - Deterministic planner, coordinator, specialist, grounding judge, and summarizer agents
 - LangGraph adapter for production-style state graph orchestration
-- Grounded answer formatting with evidence, sources, and unsupported-claim reporting
+- Clean answer-only final responses with evidence, sources, and metrics exposed separately
 - Evidence sufficiency fallback for unsupported or low-evidence queries
-- Optional local Ollama answer composition for source-grounded natural-language answers
+- Local Ollama answer composition for API and frontend natural-language answers
 - FastAPI query, streaming, health, metrics, integration readiness, and evaluation endpoints
 - Next.js console for document queries, streaming answers, sources, metrics, integrations, and evaluation
 - Deterministic evaluation runner for local regression testing
@@ -32,7 +32,7 @@ python -m pytest -q
 Expected test result:
 
 ```text
-75 passed
+77 passed
 ```
 
 The exact runtime can vary by machine.
@@ -124,6 +124,8 @@ Remove-Item Env:OLLAMA_BASE_URL
 ```
 
 When Ollama answer composition is enabled, metrics include `answer_type=llm` and `answer_model=qwen2.5:3b`. If the provider fails and `LLM_ANSWER_REQUIRED=false`, the workflow uses the deterministic answer fallback and records `answer_type=deterministic_fallback`.
+
+API and frontend query requests set `require_llm_answer=true` by default and use local Ollama with `qwen2.5:3b` unless another provider configuration is supplied. If Ollama is unavailable, the API returns an explicit error instead of showing a deterministic fallback answer in the answer panel.
 
 Index a document into Neo4j and inspect graph-expanded entities:
 

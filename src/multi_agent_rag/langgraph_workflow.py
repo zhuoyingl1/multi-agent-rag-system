@@ -34,13 +34,22 @@ class LangGraphState(TypedDict, total=False):
 class LangGraphRAGWorkflow:
     """Run the same agent stages through a LangGraph state graph."""
 
-    def __init__(self, retriever: HybridRetriever, top_k: int = 5) -> None:
+    def __init__(
+        self,
+        retriever: HybridRetriever,
+        top_k: int = 5,
+        require_llm_answer: bool = False,
+        default_answer_provider: str | None = None,
+    ) -> None:
         self.retriever = retriever
         self.top_k = top_k
         self.planner = PlannerAgent()
         self.coordinator = CoordinatorAgent()
         self.judge = GroundingJudge()
-        self.summarizer = SummarizerAgent()
+        self.summarizer = SummarizerAgent(
+            require_llm_answer=require_llm_answer,
+            default_answer_provider=default_answer_provider,
+        )
         self.graph = self._build_graph()
 
     def run(self, query: str) -> WorkflowResult:
@@ -157,6 +166,9 @@ class LangGraphRAGWorkflow:
             "mode": "langgraph",
             "evidence_status": evidence_status,
             "reranker": retriever_reranker_name(self.retriever),
+            "answer_type": self.summarizer.answer_type,
+            "answer_model": self.summarizer.answer_model,
+            "answer_error": self.summarizer.answer_error,
         }
         return WorkflowResult(
             query=state["query"],

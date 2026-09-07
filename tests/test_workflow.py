@@ -35,7 +35,8 @@ def test_workflow_returns_grounded_answer() -> None:
     assert result.sources
     assert result.agents
     assert result.grounding.score > 0
-    assert "Grounding score" in result.answer
+    assert "Grounding score" not in result.answer
+    assert result.answer.startswith("Based on the retrieved evidence")
     assert result.metrics["retrieved_sources"] >= 1
     assert result.metrics["evidence_status"] == "sufficient"
     assert result.metrics["mode"] == "deterministic_local"
