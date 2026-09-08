@@ -22,9 +22,20 @@ type QueryResponse = {
 
 type UploadResponse = {
   filename: string;
+  document_id: string;
   document_path: string;
   content_type: string | null;
   size_bytes: number;
+  status: string;
+  duplicate: boolean;
+};
+
+type DocumentStatusResponse = {
+  document_id: string;
+  status: string;
+  progress_percentage: number;
+  current_stage: string;
+  stage_details: string;
 };
 
 type HealthMetrics = {
@@ -78,11 +89,11 @@ type EvalReport = {
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 const defaultQuery = "";
-const defaultDocumentPath = "";
 
 export default function Home() {
   const [query, setQuery] = useState(defaultQuery);
-  const [documentPath, setDocumentPath] = useState(defaultDocumentPath);
+  const [documentId, setDocumentId] = useState("");
+  const [documentName, setDocumentName] = useState("");
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [streamedAnswer, setStreamedAnswer] = useState("");
   const [metrics, setMetrics] = useState<HealthMetrics | null>(null);
@@ -104,7 +115,7 @@ export default function Home() {
   const answerMode = formatAnswerMode(result?.metrics);
   const answerWarning = formatAnswerWarning(result?.metrics);
   const uploadDisabled = !hydrated || uploading || !selectedFile;
-  const runDisabled = !hydrated || loading || !query.trim() || !documentPath.trim();
+  const runDisabled = !hydrated || loading || !query.trim() || !documentId;
   const evaluationDisabled = !hydrated || evaluating;
   const groundingScore = useMemo(() => {
     const value = result?.metrics.grounding_score;
@@ -195,10 +206,6 @@ export default function Home() {
     setQuery(value);
   }
 
-  function updateDocumentPath(value: string) {
-    setDocumentPath(value);
-  }
-
   async function uploadDocument() {
     if (!selectedFile) {
       return;
@@ -207,6 +214,9 @@ export default function Home() {
     setUploading(true);
     setUploadStatus(null);
     setError(null);
+    setDocumentId("");
+    setResult(null);
+    setStreamedAnswer("");
     try {
       const body = new FormData();
       body.append("file", selectedFile);
@@ -218,8 +228,11 @@ export default function Home() {
         throw new Error(await readErrorMessage(response, `Upload request failed with ${response.status}`));
       }
       const uploaded = (await response.json()) as UploadResponse;
-      setDocumentPath(uploaded.document_path);
-      setUploadStatus(`Uploaded ${uploaded.filename}`);
+      setDocumentName(uploaded.filename);
+      setUploadStatus(`Indexing ${uploaded.filename}`);
+      await waitForDocument(uploaded.document_id, uploaded.filename);
+      setDocumentId(uploaded.document_id);
+      setUploadStatus(`Ready: ${uploaded.filename}`);
     } catch (caught) {
       setUploadStatus(null);
       setError(caught instanceof Error ? caught.message : "Upload failed");
@@ -228,13 +241,32 @@ export default function Home() {
     }
   }
 
+  async function waitForDocument(documentId: string, filename: string) {
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const response = await fetch(`${apiBaseUrl}/documents/${documentId}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, `Document status request failed with ${response.status}`));
+      }
+      const status = (await response.json()) as DocumentStatusResponse;
+      if (status.status === "completed") {
+        return;
+      }
+      if (status.status === "failed") {
+        throw new Error(status.stage_details || "Document indexing failed");
+      }
+      setUploadStatus(`Indexing ${filename}: ${status.progress_percentage}%`);
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+    }
+    throw new Error("Document indexing timed out");
+  }
+
   async function runStandardQuery() {
     const response = await fetch(`${apiBaseUrl}/query`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ query, document_path: documentPath, require_llm_answer: true }),
+      body: JSON.stringify({ query, document_id: documentId, require_llm_answer: true }),
     });
     if (!response.ok) {
       throw new Error(await readErrorMessage(response, `Query request failed with ${response.status}`));
@@ -248,7 +280,7 @@ export default function Home() {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ query, document_path: documentPath, require_llm_answer: true }),
+      body: JSON.stringify({ query, document_id: documentId, require_llm_answer: true }),
     });
     if (!response.ok || !response.body) {
       throw new Error(await readErrorMessage(response, `Stream request failed with ${response.status}`));
@@ -336,8 +368,8 @@ export default function Home() {
             <h2>Document Query</h2>
           </div>
 
-          <label htmlFor="documentPath">Document path</label>
-          <input id="documentPath" value={documentPath} onChange={(event) => updateDocumentPath(event.target.value)} />
+          <label htmlFor="indexedDocument">Indexed document</label>
+          <input id="indexedDocument" value={documentName} placeholder="Upload a document to begin" readOnly />
 
           <label htmlFor="documentUpload">Upload document</label>
           <div className="uploadRow">

@@ -1,6 +1,7 @@
 import pytest
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import MagicMock
 
 pytest.importorskip("fastapi")
@@ -8,7 +9,7 @@ pytest.importorskip("anyio")
 
 from fastapi.testclient import TestClient
 
-from multi_agent_rag.api.main import build_app
+from multi_agent_rag.api.main import build_app, run_query
 from multi_agent_rag.ingestion import RegisteredDocument
 from multi_agent_rag.persistence import DocumentRecord, DocumentStatus
 
@@ -110,6 +111,41 @@ def test_query_endpoint_uses_llm_answer_by_default(monkeypatch) -> None:
     assert data["answer"] == "RAG reduces hallucination by grounding answers in retrieved evidence."
     assert data["metrics"]["answer_type"] == "llm"
     assert data["metrics"]["answer_model"] == "qwen2.5:3b"
+
+
+def test_query_endpoint_uses_persistent_document_id(monkeypatch) -> None:
+    expected = run_query(
+        "How does RAG reduce hallucination?",
+        Path("examples/sample_docs.md"),
+        orchestrator="local",
+        retrieval_backend="local",
+        require_llm_answer=False,
+    )
+    captured: dict[str, str] = {}
+
+    def fake_document_query(query, document_id, orchestrator, require_llm_answer):
+        captured["query"] = query
+        captured["document_id"] = document_id
+        return expected
+
+    monkeypatch.setattr("multi_agent_rag.api.main.safe_run_document_query", fake_document_query)
+    client = TestClient(build_app())
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "How does RAG reduce hallucination?",
+            "document_id": "507f1f77bcf86cd799439011",
+            "require_llm_answer": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured == {
+        "query": "How does RAG reduce hallucination?",
+        "document_id": "507f1f77bcf86cd799439011",
+    }
+    assert response.json()["metrics"]["retrieved_sources"] >= 1
 
 
 def test_query_endpoint_rejects_invalid_orchestrator() -> None:
@@ -237,9 +273,9 @@ def test_upload_document_rejects_unsupported_extension(monkeypatch) -> None:
 
 
 def test_document_status_endpoint_returns_processing_state(monkeypatch) -> None:
-    service = MagicMock()
-    service.get.return_value = fake_document()
-    monkeypatch.setattr("multi_agent_rag.api.main.create_document_ingestion_service", lambda: service)
+    repository = MagicMock()
+    repository.get.return_value = fake_document()
+    monkeypatch.setattr("multi_agent_rag.api.main.DocumentRepository.from_store", lambda _store: repository)
     client = TestClient(build_app())
 
     response = client.get("/documents/507f1f77bcf86cd799439011")

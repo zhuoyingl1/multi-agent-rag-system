@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from multi_agent_rag.models import Document
+from multi_agent_rag.models import Document, RetrievalType
 from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.vector_index import QdrantDocumentIndex
 
@@ -38,6 +38,21 @@ class FakeQdrantClient:
 
     def upsert(self, collection_name: str, points: list[dict[str, object]], wait: bool) -> None:
         self.upsert_batches.append(points)
+
+    def query_points(
+        self,
+        collection_name: str,
+        query: list[float],
+        query_filter: object,
+        limit: int,
+        score_threshold: float,
+        with_payload: bool,
+    ) -> SimpleNamespace:
+        document_id = query_filter.must[0].match.value
+        points = [point for batch in self.upsert_batches for point in batch]
+        matches = [point for point in points if point["payload"]["document_id"] == document_id]
+        scored = [SimpleNamespace(payload=point["payload"], score=0.9) for point in matches[:limit]]
+        return SimpleNamespace(points=scored)
 
 
 def test_document_index_batches_embeddings_and_persists_document_payload() -> None:
@@ -76,3 +91,20 @@ def test_document_index_rejects_invalid_embedding_count() -> None:
         index.replace_document_chunks("doc-1", chunks)
 
     assert not client.upsert_batches
+
+
+def test_document_index_searches_only_the_requested_document() -> None:
+    embedder = FakeEmbedder()
+    client = FakeQdrantClient()
+    index = QdrantDocumentIndex("http://localhost:6333", "document_chunks", embedder, client=client)
+    first = chunk_document(Document(title="first.md", text="RAG evidence", document_id="doc-1"))
+    second = chunk_document(Document(title="second.md", text="Unrelated content", document_id="doc-2"))
+    index.replace_document_chunks("doc-1", first)
+    index.replace_document_chunks("doc-2", second)
+
+    results = index.search("doc-1", "RAG evidence", limit=5)
+
+    assert len(results) == 1
+    assert results[0].chunk.document_id == "doc-1"
+    assert results[0].retrieval_type is RetrievalType.VECTOR
+    assert results[0].highlights == ["rag", "evidence"]

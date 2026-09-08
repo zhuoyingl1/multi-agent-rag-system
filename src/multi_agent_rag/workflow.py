@@ -9,7 +9,7 @@ from multi_agent_rag.agents.experts import ExpertAgent
 from multi_agent_rag.agents.judge import GroundingJudge
 from multi_agent_rag.agents.planner import PlannerAgent
 from multi_agent_rag.agents.summarizer import SummarizerAgent
-from multi_agent_rag.models import AgentResult, SearchResult, WorkflowResult
+from multi_agent_rag.models import AgentResult, RetrievalType, SearchResult, WorkflowResult
 from multi_agent_rag.retrieval.hybrid import HybridRetriever
 from multi_agent_rag.retrieval.tokenization import tokenize
 
@@ -41,6 +41,7 @@ EVIDENCE_STOPWORDS = {
     "why",
     "with",
 }
+SEMANTIC_EVIDENCE_MIN_SCORE = 0.5
 
 
 class MultiAgentRAGWorkflow:
@@ -140,6 +141,12 @@ class MultiAgentRAGWorkflow:
 def has_enough_evidence(query: str, sources: list[SearchResult]) -> bool:
     if not sources:
         return False
+    if any(
+        source.retrieval_type in {RetrievalType.VECTOR, RetrievalType.RERANKED}
+        and source.score >= SEMANTIC_EVIDENCE_MIN_SCORE
+        for source in sources
+    ):
+        return True
     query_terms = [term for term in tokenize(query) if term not in EVIDENCE_STOPWORDS]
     if not query_terms:
         return False

@@ -1,10 +1,10 @@
 from multi_agent_rag.agents.judge import GroundingJudge
 from multi_agent_rag.agents.planner import PlannerAgent
-from multi_agent_rag.models import Document
+from multi_agent_rag.models import Chunk, ChunkType, Document, RetrievalType, SearchResult
 from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.hybrid import HybridRetriever
 from multi_agent_rag.retrieval.reranking import LexicalReranker, RerankingRetriever
-from multi_agent_rag.workflow import MultiAgentRAGWorkflow
+from multi_agent_rag.workflow import MultiAgentRAGWorkflow, has_enough_evidence
 
 
 def build_workflow() -> MultiAgentRAGWorkflow:
@@ -73,6 +73,26 @@ def test_workflow_uses_fallback_for_insufficient_evidence() -> None:
     assert result.metrics["evidence_status"] == "insufficient"
     assert result.metrics["answer_type"] == "deterministic"
     assert "No sufficiently relevant retrieved evidence" in result.answer
+
+
+def test_semantic_vector_score_can_establish_evidence_without_exact_terms() -> None:
+    source = SearchResult(
+        chunk=Chunk("doc-1", "chunk-1", "Vector retrieval handles paraphrased questions.", ChunkType.PROSE, 0),
+        score=0.58,
+        retrieval_type=RetrievalType.VECTOR,
+    )
+
+    assert has_enough_evidence("How does the system find conceptually similar wording?", [source]) is True
+
+
+def test_low_semantic_vector_score_does_not_establish_evidence() -> None:
+    source = SearchResult(
+        chunk=Chunk("doc-1", "chunk-1", "Unrelated content.", ChunkType.PROSE, 0),
+        score=0.49,
+        retrieval_type=RetrievalType.VECTOR,
+    )
+
+    assert has_enough_evidence("How does the system find conceptually similar wording?", [source]) is False
 
 
 def test_judge_flags_missing_sources() -> None:

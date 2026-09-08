@@ -24,9 +24,9 @@ from multi_agent_rag.ingestion import DocumentIngestionService
 from multi_agent_rag.models import AgentResult, SearchResult, WorkflowResult
 from multi_agent_rag.observability import metrics_registry
 from multi_agent_rag.orchestration import create_workflow
-from multi_agent_rag.persistence import ChunkRepository, DocumentRecord, DocumentRepository, MongoStore
+from multi_agent_rag.persistence import ChunkRepository, DocumentRecord, DocumentRepository, DocumentStatus, MongoStore
 from multi_agent_rag.retrieval.chunking import chunk_document
-from multi_agent_rag.retrieval.factory import create_retriever
+from multi_agent_rag.retrieval.factory import create_document_retriever, create_retriever
 from multi_agent_rag.retrieval.embeddings import OllamaEmbeddingService
 from multi_agent_rag.retrieval.vector_index import QdrantDocumentIndex
 
@@ -42,6 +42,7 @@ class QueryRequest(BaseModel):
     """API request for local document question answering."""
 
     query: str = Field(min_length=1)
+    document_id: str | None = None
     document_path: str = Field(default=str(DEFAULT_DOCUMENT_PATH), min_length=1)
     orchestrator: str = Field(default="auto", pattern="^(auto|local|langgraph)$")
     retrieval_backend: str = Field(default="qdrant", pattern="^(local|qdrant)$")
@@ -121,7 +122,7 @@ def build_app() -> FastAPI:
     @app.get("/documents/{document_id}")
     def document_status(document_id: str) -> dict[str, Any]:
         try:
-            document = create_document_ingestion_service().get(document_id)
+            document = DocumentRepository.from_store(MONGO_STORE).get(document_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if document is None:
@@ -139,25 +140,13 @@ def build_app() -> FastAPI:
 
     @app.post("/query")
     def query(request: QueryRequest) -> dict[str, Any]:
-        result = safe_run_query(
-            request.query,
-            Path(request.document_path),
-            request.orchestrator,
-            request.retrieval_backend,
-            request.require_llm_answer,
-        )
+        result = run_query_request(request)
         metrics_registry.record_run(result.metrics)
         return workflow_payload(result)
 
     @app.post("/query/stream")
     def query_stream(request: QueryRequest) -> StreamingResponse:
-        result = safe_run_query(
-            request.query,
-            Path(request.document_path),
-            request.orchestrator,
-            request.retrieval_backend,
-            request.require_llm_answer,
-        )
+        result = run_query_request(request)
         metrics_registry.record_run(result.metrics)
 
         def events():
@@ -175,6 +164,23 @@ def build_app() -> FastAPI:
     return app
 
 
+def run_query_request(request: QueryRequest) -> WorkflowResult:
+    if request.document_id:
+        return safe_run_document_query(
+            request.query,
+            request.document_id,
+            request.orchestrator,
+            request.require_llm_answer,
+        )
+    return safe_run_query(
+        request.query,
+        Path(request.document_path),
+        request.orchestrator,
+        request.retrieval_backend,
+        request.require_llm_answer,
+    )
+
+
 def run_query(
     query: str,
     document_path: Path,
@@ -185,6 +191,32 @@ def run_query(
     document = load_document(document_path)
     retriever = create_retriever(retrieval_backend)
     retriever.index(chunk_document(document))
+    try:
+        return create_workflow(
+            retriever,
+            orchestrator=orchestrator,
+            require_llm_answer=require_llm_answer,
+            default_answer_provider="ollama" if require_llm_answer else None,
+        ).run(query)
+    finally:
+        close = getattr(retriever, "close", None)
+        if callable(close):
+            close()
+
+
+def run_document_query(
+    query: str,
+    document_id: str,
+    orchestrator: str | None = None,
+    require_llm_answer: bool = False,
+) -> WorkflowResult:
+    document = DocumentRepository.from_store(MONGO_STORE).get(document_id)
+    if document is None:
+        raise ValueError(f"Document not found: {document_id}")
+    if document.status is not DocumentStatus.COMPLETED:
+        raise RuntimeError(f"Document is not ready for queries: {document.status.value}")
+
+    retriever = create_document_retriever(document_id)
     try:
         return create_workflow(
             retriever,
@@ -291,6 +323,23 @@ def safe_run_query(
             require_llm_answer=require_llm_answer,
         )
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def safe_run_document_query(
+    query: str,
+    document_id: str,
+    orchestrator: str | None = None,
+    require_llm_answer: bool = False,
+) -> WorkflowResult:
+    try:
+        return run_document_query(
+            query,
+            document_id,
+            orchestrator=orchestrator,
+            require_llm_answer=require_llm_answer,
+        )
+    except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

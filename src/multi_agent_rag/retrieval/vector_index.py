@@ -8,7 +8,8 @@ import math
 from typing import Any, Protocol
 import uuid
 
-from multi_agent_rag.models import Chunk
+from multi_agent_rag.models import Chunk, ChunkType, RetrievalType, SearchResult
+from multi_agent_rag.retrieval.tokenization import tokenize
 
 
 class EmbeddingProvider(Protocol):
@@ -26,12 +27,14 @@ class QdrantDocumentIndex:
         collection: str,
         embedder: EmbeddingProvider,
         batch_size: int = 50,
+        score_threshold: float = 0.5,
         client: Any | None = None,
     ) -> None:
         self.url = url
         self.collection = collection
         self.embedder = embedder
         self.batch_size = max(1, batch_size)
+        self.score_threshold = score_threshold
         self._client_injected = client is not None
         self.client = client or self._build_client(url)
 
@@ -57,6 +60,23 @@ class QdrantDocumentIndex:
             points = [self._point(chunk, vector) for chunk, vector in zip(batch_chunks, batch_vectors)]
             self.client.upsert(collection_name=self.collection, points=points, wait=True)
         return len(chunks)
+
+    def search(self, document_id: str, query: str, limit: int) -> list[SearchResult]:
+        if not self.client.collection_exists(self.collection):
+            return []
+        vectors = self.embedder.encode([query])
+        self._validate_vectors(vectors, 1)
+        response = self.client.query_points(
+            collection_name=self.collection,
+            query=vectors[0],
+            query_filter=self._document_filter(document_id),
+            limit=limit,
+            score_threshold=self.score_threshold,
+            with_payload=True,
+        )
+        points = list(getattr(response, "points", response))
+        terms = tokenize(query)
+        return [self._search_result(point, terms) for point in points]
 
     def close(self) -> None:
         if hasattr(self.client, "close"):
@@ -99,16 +119,23 @@ class QdrantDocumentIndex:
             return
         self.client.delete(
             collection_name=self.collection,
-            points_selector=self._document_filter(document_id),
+            points_selector=self._document_selector(document_id),
             wait=True,
         )
 
     def _document_filter(self, document_id: str) -> Any:
         try:
-            from qdrant_client.models import FieldCondition, Filter, FilterSelector, MatchValue
+            from qdrant_client.models import FieldCondition, Filter, MatchValue
         except ImportError:
-            return {"filter": {"must": [{"key": "document_id", "match": {"value": document_id}}]}}
-        document_filter = Filter(must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))])
+            return {"must": [{"key": "document_id", "match": {"value": document_id}}]}
+        return Filter(must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))])
+
+    def _document_selector(self, document_id: str) -> Any:
+        document_filter = self._document_filter(document_id)
+        try:
+            from qdrant_client.models import FilterSelector
+        except ImportError:
+            return {"filter": document_filter}
         return FilterSelector(filter=document_filter)
 
     def _point(self, chunk: Chunk, vector: list[float]) -> Any:
@@ -128,3 +155,41 @@ class QdrantDocumentIndex:
         except ImportError:
             return {"id": point_id, "vector": vector, "payload": payload}
         return PointStruct(id=point_id, vector=vector, payload=payload)
+
+    def _search_result(self, point: Any, terms: list[str]) -> SearchResult:
+        payload = dict(point.get("payload", {}) if isinstance(point, dict) else getattr(point, "payload", {}))
+        chunk = Chunk(
+            document_id=str(payload["document_id"]),
+            chunk_id=str(payload["chunk_id"]),
+            text=str(payload["text"]),
+            chunk_type=ChunkType(str(payload["chunk_type"])),
+            index=int(payload["chunk_index"]),
+            metadata={str(key): str(value) for key, value in dict(payload.get("metadata", {})).items()},
+        )
+        score = float(point.get("score", 0.0) if isinstance(point, dict) else getattr(point, "score", 0.0))
+        lowered = chunk.text.lower()
+        highlights = [term for term in terms if term.lower() in lowered]
+        return SearchResult(
+            chunk=chunk,
+            score=score,
+            retrieval_type=RetrievalType.VECTOR,
+            highlights=list(dict.fromkeys(highlights))[:5],
+        )
+
+
+class QdrantDocumentRetriever:
+    """Retrieve only from vectors previously indexed for one document."""
+
+    def __init__(self, index: QdrantDocumentIndex, document_id: str, top_k: int = 5) -> None:
+        self.index = index
+        self.document_id = document_id
+        self.top_k = top_k
+
+    def index(self, chunks: list[Chunk]) -> None:
+        raise RuntimeError("Persistent document chunks must be indexed during ingestion.")
+
+    def retrieve(self, query: str, top_k: int | None = None) -> list[SearchResult]:
+        return self.index.search(self.document_id, query, top_k or self.top_k)
+
+    def close(self) -> None:
+        self.index.close()
