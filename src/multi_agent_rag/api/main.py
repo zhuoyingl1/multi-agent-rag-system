@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from hashlib import sha256
 import json
+import os
 import re
 from uuid import uuid4
 from pathlib import Path
@@ -26,6 +27,8 @@ from multi_agent_rag.orchestration import create_workflow
 from multi_agent_rag.persistence import ChunkRepository, DocumentRecord, DocumentRepository, MongoStore
 from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.factory import create_retriever
+from multi_agent_rag.retrieval.embeddings import OllamaEmbeddingService
+from multi_agent_rag.retrieval.vector_index import QdrantDocumentIndex
 
 DEFAULT_DOCUMENT_PATH = Path("examples/sample_docs.md")
 DEFAULT_EVAL_CASES_PATH = Path("examples/eval_cases.json")
@@ -196,9 +199,21 @@ def run_query(
 
 
 def create_document_ingestion_service() -> DocumentIngestionService:
+    embedder = OllamaEmbeddingService(
+        base_url=os.getenv("OLLAMA_BASE_URL") or "http://127.0.0.1:11434",
+        model_name=os.getenv("OLLAMA_EMBEDDING_MODEL") or "nomic-embed-text",
+        timeout_seconds=float(os.getenv("EMBEDDING_TIMEOUT_SECONDS") or "60"),
+    )
+    vector_index = QdrantDocumentIndex(
+        url=os.getenv("QDRANT_URL") or "http://localhost:6333",
+        collection=os.getenv("QDRANT_DOCUMENT_COLLECTION") or "document_chunks",
+        embedder=embedder,
+        batch_size=int(os.getenv("EMBEDDING_BATCH_SIZE") or "50"),
+    )
     return DocumentIngestionService(
         DocumentRepository.from_store(MONGO_STORE),
         ChunkRepository.from_store(MONGO_STORE),
+        vector_index,
     )
 
 

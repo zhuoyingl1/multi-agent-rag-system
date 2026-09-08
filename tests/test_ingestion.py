@@ -55,6 +55,40 @@ def test_ingestion_parses_chunks_and_completes_document(tmp_path) -> None:
     documents.update_status.assert_called_once_with("document-id", DocumentStatus.COMPLETED)
 
 
+def test_ingestion_persists_chunks_in_mongodb_and_qdrant(tmp_path) -> None:
+    path = tmp_path / "notes.md"
+    path.write_text("# Notes\n\nRAG grounds answers in retrieved evidence.", encoding="utf-8")
+    documents = MagicMock()
+    chunks = MagicMock()
+    vector_index = MagicMock()
+    service = DocumentIngestionService(documents, chunks, vector_index)
+
+    chunk_count = service.process("document-id", path)
+
+    assert chunk_count == 2
+    stored_chunks = chunks.replace_document_chunks.call_args.args[1]
+    vector_index.replace_document_chunks.assert_called_once_with("document-id", stored_chunks)
+    progress_calls = documents.update_progress.call_args_list
+    assert progress_calls[-1].args[:3] == ("document-id", 85, "indexing")
+
+
+def test_ingestion_marks_document_failed_when_vector_indexing_fails(tmp_path) -> None:
+    path = tmp_path / "notes.md"
+    path.write_text("RAG grounds answers in retrieved evidence.", encoding="utf-8")
+    documents = MagicMock()
+    chunks = MagicMock()
+    vector_index = MagicMock()
+    vector_index.replace_document_chunks.side_effect = RuntimeError("Qdrant unavailable")
+    service = DocumentIngestionService(documents, chunks, vector_index)
+
+    chunk_count = service.process("document-id", path)
+
+    assert chunk_count == 0
+    status_call = documents.update_status.call_args
+    assert status_call.args[1] is DocumentStatus.FAILED
+    assert status_call.args[2] == "Qdrant unavailable"
+
+
 def test_ingestion_marks_document_failed_when_parsing_fails(tmp_path) -> None:
     documents = MagicMock()
     chunks = MagicMock()

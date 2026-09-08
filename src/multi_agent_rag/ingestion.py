@@ -9,6 +9,7 @@ from typing import Any
 from multi_agent_rag.documents import load_document
 from multi_agent_rag.persistence import ChunkRepository, DocumentRecord, DocumentRepository, DocumentStatus
 from multi_agent_rag.retrieval.chunking import chunk_document
+from multi_agent_rag.retrieval.vector_index import QdrantDocumentIndex
 
 
 @dataclass(frozen=True)
@@ -22,9 +23,15 @@ class RegisteredDocument:
 class DocumentIngestionService:
     """Coordinate document metadata, parsing, chunking, and status updates."""
 
-    def __init__(self, documents: DocumentRepository, chunks: ChunkRepository) -> None:
+    def __init__(
+        self,
+        documents: DocumentRepository,
+        chunks: ChunkRepository,
+        vector_index: QdrantDocumentIndex | None = None,
+    ) -> None:
         self.documents = documents
         self.chunks = chunks
+        self.vector_index = vector_index
 
     def register(
         self,
@@ -55,8 +62,11 @@ class DocumentIngestionService:
             document = replace(load_document(file_path), document_id=document_id)
             self.documents.update_progress(document_id, 60, "chunking")
             chunks = chunk_document(document)
-            self.documents.update_progress(document_id, 85, "storing", f"{len(chunks)} chunks")
+            self.documents.update_progress(document_id, 75, "storing", f"{len(chunks)} chunks")
             self.chunks.replace_document_chunks(document_id, chunks)
+            if self.vector_index is not None:
+                self.documents.update_progress(document_id, 85, "indexing", f"{len(chunks)} vectors")
+                self.vector_index.replace_document_chunks(document_id, chunks)
             self.documents.update_status(document_id, DocumentStatus.COMPLETED)
             return len(chunks)
         except Exception as exc:
