@@ -142,7 +142,7 @@ def has_enough_evidence(query: str, sources: list[SearchResult]) -> bool:
     if not sources:
         return False
     if any(
-        source.retrieval_type in {RetrievalType.VECTOR, RetrievalType.RERANKED}
+        source.retrieval_type in {RetrievalType.VECTOR, RetrievalType.HYBRID, RetrievalType.RERANKED}
         and source.score >= SEMANTIC_EVIDENCE_MIN_SCORE
         for source in sources
     ):

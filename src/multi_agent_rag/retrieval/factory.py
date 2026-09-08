@@ -3,22 +3,13 @@
 from __future__ import annotations
 
 import os
-from typing import Protocol
 
-from multi_agent_rag.models import Chunk, SearchResult
+from multi_agent_rag.persistence import ChunkRepository, MongoStore
 from multi_agent_rag.retrieval.embeddings import OllamaEmbeddingService
+from multi_agent_rag.retrieval.factory_types import Retriever
 from multi_agent_rag.retrieval.hybrid import HybridRetriever
+from multi_agent_rag.retrieval.persistent_hybrid import MongoKeywordRetriever, PersistentHybridRetriever
 from multi_agent_rag.retrieval.vector_index import QdrantDocumentIndex, QdrantDocumentRetriever
-
-
-class Retriever(Protocol):
-    """Shared retriever interface for local and production retrieval backends."""
-
-    def index(self, chunks: list[Chunk]) -> None:
-        """Index document chunks."""
-
-    def retrieve(self, query: str, top_k: int | None = None) -> list[SearchResult]:
-        """Retrieve relevant chunks."""
 
 
 DEFAULT_QDRANT_URL = "http://localhost:6333"
@@ -57,7 +48,17 @@ def create_document_retriever(document_id: str, top_k: int = 5) -> Retriever:
         embedder=embedder,
         score_threshold=float(os.getenv("QDRANT_SCORE_THRESHOLD") or "0.5"),
     )
-    return _with_optional_reranker(QdrantDocumentRetriever(index, document_id, top_k=top_k))
+    vector = QdrantDocumentRetriever(index, document_id, top_k=top_k)
+    store = MongoStore()
+    keyword = MongoKeywordRetriever(ChunkRepository.from_store(store), document_id)
+    retriever = PersistentHybridRetriever(
+        vector,
+        keyword,
+        store,
+        top_k=top_k,
+        rrf_k=float(os.getenv("RRF_K") or "60"),
+    )
+    return _with_optional_reranker(retriever)
 
 
 def _with_optional_reranker(retriever: Retriever) -> Retriever:
