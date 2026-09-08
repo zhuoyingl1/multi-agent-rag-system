@@ -68,3 +68,38 @@ def test_persistent_hybrid_retriever_queries_both_sources_and_closes_resources()
     keyword.retrieve.assert_called_once_with("hybrid retrieval", 50)
     vector.close.assert_called_once()
     store.close.assert_called_once()
+
+
+def test_persistent_hybrid_retriever_fuses_graph_results() -> None:
+    vector = MagicMock()
+    keyword = MagicMock()
+    graph = MagicMock()
+    store = MagicMock()
+    vector.retrieve.return_value = [result("chunk-1", "Shared evidence", 0.8, RetrievalType.VECTOR)]
+    keyword.retrieve.return_value = [result("chunk-2", "Keyword evidence", 1.2, RetrievalType.KEYWORD)]
+    graph.retrieve.return_value = [result("chunk-1", "Shared evidence", 1.0, RetrievalType.GRAPH)]
+    retriever = PersistentHybridRetriever(vector, keyword, store, graph=graph)
+
+    results = retriever.retrieve("How are the entities related?", top_k=2)
+    retriever.close()
+
+    assert results[0].chunk.chunk_id == "chunk-1"
+    assert results[0].retrieval_type is RetrievalType.HYBRID
+    graph.retrieve.assert_called_once_with("How are the entities related?", 50)
+    graph.close.assert_called_once()
+
+
+def test_persistent_hybrid_retriever_continues_when_graph_fails() -> None:
+    vector = MagicMock()
+    keyword = MagicMock()
+    graph = MagicMock()
+    store = MagicMock()
+    vector.retrieve.return_value = [result("chunk-1", "Vector evidence", 0.8, RetrievalType.VECTOR)]
+    keyword.retrieve.return_value = []
+    graph.retrieve.side_effect = RuntimeError("Neo4j unavailable")
+    retriever = PersistentHybridRetriever(vector, keyword, store, graph=graph)
+
+    results = retriever.retrieve("What evidence is available?")
+
+    assert [item.chunk.chunk_id for item in results] == ["chunk-1"]
+    assert retriever.last_errors == {"graph": "RuntimeError: Neo4j unavailable"}

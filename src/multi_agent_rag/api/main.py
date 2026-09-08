@@ -28,6 +28,7 @@ from multi_agent_rag.persistence import ChunkRepository, DocumentRecord, Documen
 from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.factory import create_document_retriever, create_retriever
 from multi_agent_rag.retrieval.embeddings import OllamaEmbeddingService
+from multi_agent_rag.retrieval.neo4j_adapter import Neo4jGraphAdapter
 from multi_agent_rag.retrieval.vector_index import QdrantDocumentIndex
 
 DEFAULT_DOCUMENT_PATH = Path("examples/sample_docs.md")
@@ -242,10 +243,17 @@ def create_document_ingestion_service() -> DocumentIngestionService:
         embedder=embedder,
         batch_size=int(os.getenv("EMBEDDING_BATCH_SIZE") or "50"),
     )
+    graph_index = Neo4jGraphAdapter(
+        uri=os.getenv("NEO4J_URI") or "bolt://localhost:7687",
+        user=os.getenv("NEO4J_USER") or "neo4j",
+        password=os.getenv("NEO4J_PASSWORD") or "password123",
+        database=os.getenv("NEO4J_DATABASE") or "neo4j",
+    )
     return DocumentIngestionService(
         DocumentRepository.from_store(MONGO_STORE),
         ChunkRepository.from_store(MONGO_STORE),
         vector_index,
+        graph_index,
     )
 
 

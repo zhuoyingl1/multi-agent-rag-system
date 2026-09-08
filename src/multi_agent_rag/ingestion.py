@@ -9,6 +9,7 @@ from typing import Any
 from multi_agent_rag.documents import load_document
 from multi_agent_rag.persistence import ChunkRepository, DocumentRecord, DocumentRepository, DocumentStatus
 from multi_agent_rag.retrieval.chunking import chunk_document
+from multi_agent_rag.retrieval.neo4j_adapter import Neo4jGraphAdapter
 from multi_agent_rag.retrieval.vector_index import QdrantDocumentIndex
 
 
@@ -28,10 +29,12 @@ class DocumentIngestionService:
         documents: DocumentRepository,
         chunks: ChunkRepository,
         vector_index: QdrantDocumentIndex | None = None,
+        graph_index: Neo4jGraphAdapter | None = None,
     ) -> None:
         self.documents = documents
         self.chunks = chunks
         self.vector_index = vector_index
+        self.graph_index = graph_index
 
     def register(
         self,
@@ -67,11 +70,17 @@ class DocumentIngestionService:
             if self.vector_index is not None:
                 self.documents.update_progress(document_id, 85, "indexing", f"{len(chunks)} vectors")
                 self.vector_index.replace_document_chunks(document_id, chunks)
+            if self.graph_index is not None:
+                self.documents.update_progress(document_id, 92, "graph_indexing", f"{len(chunks)} chunks")
+                self.graph_index.index(chunks)
             self.documents.update_status(document_id, DocumentStatus.COMPLETED)
             return len(chunks)
         except Exception as exc:
             self.documents.update_status(document_id, DocumentStatus.FAILED, str(exc))
             return 0
+        finally:
+            if self.graph_index is not None:
+                self.graph_index.close()
 
     def get(self, document_id: str) -> DocumentRecord | None:
         return self.documents.get(document_id)

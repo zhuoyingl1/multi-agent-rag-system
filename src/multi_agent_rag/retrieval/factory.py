@@ -8,6 +8,7 @@ from multi_agent_rag.persistence import ChunkRepository, MongoStore
 from multi_agent_rag.retrieval.embeddings import OllamaEmbeddingService
 from multi_agent_rag.retrieval.factory_types import Retriever
 from multi_agent_rag.retrieval.hybrid import HybridRetriever
+from multi_agent_rag.retrieval.neo4j_adapter import Neo4jGraphAdapter, Neo4jGraphRetriever
 from multi_agent_rag.retrieval.persistent_hybrid import MongoKeywordRetriever, PersistentHybridRetriever
 from multi_agent_rag.retrieval.vector_index import QdrantDocumentIndex, QdrantDocumentRetriever
 
@@ -50,11 +51,20 @@ def create_document_retriever(document_id: str, top_k: int = 5) -> Retriever:
     )
     vector = QdrantDocumentRetriever(index, document_id, top_k=top_k)
     store = MongoStore()
-    keyword = MongoKeywordRetriever(ChunkRepository.from_store(store), document_id)
+    chunks = ChunkRepository.from_store(store)
+    keyword = MongoKeywordRetriever(chunks, document_id)
+    graph_adapter = Neo4jGraphAdapter(
+        uri=os.getenv("NEO4J_URI") or "bolt://localhost:7687",
+        user=os.getenv("NEO4J_USER") or "neo4j",
+        password=os.getenv("NEO4J_PASSWORD") or "password123",
+        database=os.getenv("NEO4J_DATABASE") or "neo4j",
+    )
+    graph = Neo4jGraphRetriever(graph_adapter, chunks, document_id)
     retriever = PersistentHybridRetriever(
         vector,
         keyword,
         store,
+        graph=graph,
         top_k=top_k,
         rrf_k=float(os.getenv("RRF_K") or "60"),
     )

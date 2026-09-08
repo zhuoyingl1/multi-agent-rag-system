@@ -117,22 +117,25 @@ def reciprocal_rank_fusion(
 
 
 class PersistentHybridRetriever:
-    """Run persistent vector and BM25 retrieval concurrently, then fuse them."""
+    """Run persistent vector, BM25, and graph retrieval concurrently."""
 
     def __init__(
         self,
         vector: Retriever,
         keyword: Retriever,
         store: MongoStore,
+        graph: Retriever | None = None,
         top_k: int = 5,
         rrf_k: float = 60.0,
     ) -> None:
         self.vector = vector
         self.keyword = keyword
+        self.graph = graph
         self.store = store
         self.top_k = top_k
         self.rrf_k = rrf_k
         self.last_candidate_count = 0
+        self.last_errors: dict[str, str] = {}
 
     def index(self, chunks: list[Chunk]) -> None:
         raise RuntimeError("Persistent document chunks must be indexed during ingestion.")
@@ -140,20 +143,36 @@ class PersistentHybridRetriever:
     def retrieve(self, query: str, top_k: int | None = None) -> list[SearchResult]:
         limit = top_k or self.top_k
         candidate_limit = max(50, limit * 3)
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            vector_future = executor.submit(self.vector.retrieve, query, candidate_limit)
-            keyword_future = executor.submit(self.keyword.retrieve, query, candidate_limit)
-            vector_results = vector_future.result()
-            keyword_results = keyword_future.result()
-        self.last_candidate_count = len({result.chunk.chunk_id for result in [*vector_results, *keyword_results]})
+        retrievers = [("vector", self.vector, 1.0), ("keyword", self.keyword, 0.8)]
+        if self.graph is not None:
+            retrievers.append(("graph", self.graph, 0.7))
+
+        self.last_errors = {}
+        ranked_lists: list[tuple[list[SearchResult], float]] = []
+        with ThreadPoolExecutor(max_workers=len(retrievers)) as executor:
+            futures = {
+                name: (executor.submit(retriever.retrieve, query, candidate_limit), weight)
+                for name, retriever, weight in retrievers
+            }
+            for name, (future, weight) in futures.items():
+                try:
+                    ranked_lists.append((future.result(), weight))
+                except Exception as exc:
+                    self.last_errors[name] = f"{exc.__class__.__name__}: {exc}"
+
+        all_results = [result for results, _ in ranked_lists for result in results]
+        self.last_candidate_count = len({result.chunk.chunk_id for result in all_results})
         return reciprocal_rank_fusion(
-            [(vector_results, 1.0), (keyword_results, 0.8)],
+            ranked_lists,
             limit=limit,
             rrf_k=self.rrf_k,
         )
 
     def close(self) -> None:
         close = getattr(self.vector, "close", None)
+        if callable(close):
+            close()
+        close = getattr(self.graph, "close", None)
         if callable(close):
             close()
         self.store.close()

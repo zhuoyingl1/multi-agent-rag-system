@@ -13,6 +13,7 @@ class RetrievalType(str, Enum):
     KEYWORD = "keyword"
     VECTOR = "vector"
     ENTITY = "entity"
+    GRAPH = "graph"
     HYBRID = "hybrid"
     RERANKED = "reranked"
 
