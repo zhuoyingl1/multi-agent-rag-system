@@ -36,6 +36,19 @@ class DocumentRecord:
 
 
 @dataclass(frozen=True)
+class ChunkRecord:
+    """One structured document chunk stored for later indexing."""
+
+    chunk_id: str
+    document_id: str
+    text: str
+    chunk_type: str
+    index: int
+    metadata: dict[str, Any]
+    created_at: datetime
+
+
+@dataclass(frozen=True)
 class ConversationMessage:
     """One persisted user or assistant message."""
 

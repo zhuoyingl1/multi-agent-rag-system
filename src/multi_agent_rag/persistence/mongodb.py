@@ -14,7 +14,8 @@ from pymongo import MongoClient
 from pymongo.collection import Collection
 from pymongo.database import Database
 
-from multi_agent_rag.persistence.models import ConversationMessage, ConversationRecord, DocumentRecord, DocumentStatus
+from multi_agent_rag.models import Chunk
+from multi_agent_rag.persistence.models import ChunkRecord, ConversationMessage, ConversationRecord, DocumentRecord, DocumentStatus
 
 
 def utc_now() -> datetime:
@@ -143,6 +144,40 @@ class DocumentRepository:
         return result.matched_count > 0
 
 
+class ChunkRepository:
+    """Persist structured chunks produced by document ingestion."""
+
+    def __init__(self, collection: Collection[dict[str, Any]]) -> None:
+        self.collection = collection
+
+    @classmethod
+    def from_store(cls, store: MongoStore) -> "ChunkRepository":
+        return cls(store.collection("chunks"))
+
+    def replace_document_chunks(self, document_id: str, chunks: list[Chunk]) -> list[ChunkRecord]:
+        self.collection.delete_many({"document_id": document_id})
+        created_at = utc_now()
+        payloads = [
+            {
+                "_id": chunk.chunk_id,
+                "document_id": document_id,
+                "text": chunk.text,
+                "chunk_type": chunk.chunk_type.value,
+                "index": chunk.index,
+                "metadata": chunk.metadata,
+                "created_at": created_at,
+            }
+            for chunk in chunks
+        ]
+        if payloads:
+            self.collection.insert_many(payloads)
+        return [_chunk_record(payload) for payload in payloads]
+
+    def list_for_document(self, document_id: str) -> list[ChunkRecord]:
+        cursor = self.collection.find({"document_id": document_id}).sort("index", 1)
+        return [_chunk_record(chunk) for chunk in cursor]
+
+
 class ConversationRepository:
     """Persist conversations and their ordered messages."""
 
@@ -236,6 +271,18 @@ def _conversation_message(message: dict[str, Any]) -> ConversationMessage:
         content=str(message["content"]),
         timestamp=message["timestamp"],
         metadata=dict(message.get("metadata") or {}),
+    )
+
+
+def _chunk_record(chunk: dict[str, Any]) -> ChunkRecord:
+    return ChunkRecord(
+        chunk_id=str(chunk["_id"]),
+        document_id=str(chunk["document_id"]),
+        text=str(chunk["text"]),
+        chunk_type=str(chunk["chunk_type"]),
+        index=int(chunk["index"]),
+        metadata=dict(chunk.get("metadata") or {}),
+        created_at=chunk["created_at"],
     )
 
 

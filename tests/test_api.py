@@ -1,4 +1,7 @@
 import pytest
+from dataclasses import replace
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
 pytest.importorskip("fastapi")
 pytest.importorskip("anyio")
@@ -6,6 +9,26 @@ pytest.importorskip("anyio")
 from fastapi.testclient import TestClient
 
 from multi_agent_rag.api.main import build_app
+from multi_agent_rag.ingestion import RegisteredDocument
+from multi_agent_rag.persistence import DocumentRecord, DocumentStatus
+
+
+def fake_document(status: DocumentStatus = DocumentStatus.PROCESSING) -> DocumentRecord:
+    now = datetime.now(UTC)
+    return DocumentRecord(
+        document_id="507f1f77bcf86cd799439011",
+        title="uploaded.md",
+        file_type="md",
+        file_path="output/uploads/uploaded.md",
+        file_size=70,
+        file_hash="hash",
+        status=status,
+        progress_percentage=100 if status is DocumentStatus.COMPLETED else 0,
+        current_stage=status.value,
+        stage_details="",
+        created_at=now,
+        updated_at=now,
+    )
 
 
 def test_health_endpoint() -> None:
@@ -155,7 +178,20 @@ def test_query_endpoint_rejects_empty_fields() -> None:
     assert {tuple(error["loc"]) for error in errors} == {("body", "query"), ("body", "document_path")}
 
 
-def test_upload_document_returns_queryable_path() -> None:
+def test_upload_document_returns_queryable_path(monkeypatch) -> None:
+    service = MagicMock()
+    service.register.side_effect = lambda **values: RegisteredDocument(
+        replace(
+            fake_document(),
+            title=values["title"],
+            file_path=values["file_path"],
+            file_size=values["file_size"],
+            file_hash=values["file_hash"],
+            metadata=values["metadata"],
+        ),
+        duplicate=False,
+    )
+    monkeypatch.setattr("multi_agent_rag.api.main.create_document_ingestion_service", lambda: service)
     client = TestClient(build_app())
 
     upload = client.post(
@@ -166,8 +202,12 @@ def test_upload_document_returns_queryable_path() -> None:
     assert upload.status_code == 200
     uploaded = upload.json()
     assert uploaded["filename"] == "uploaded.md"
+    assert uploaded["document_id"] == "507f1f77bcf86cd799439011"
     assert uploaded["document_path"].endswith(".md")
     assert uploaded["size_bytes"] > 0
+    assert uploaded["status"] == "processing"
+    assert uploaded["duplicate"] is False
+    service.process.assert_called_once()
 
     response = client.post(
         "/query",
@@ -183,7 +223,8 @@ def test_upload_document_returns_queryable_path() -> None:
     assert response.json()["metrics"]["retrieved_sources"] >= 1
 
 
-def test_upload_document_rejects_unsupported_extension() -> None:
+def test_upload_document_rejects_unsupported_extension(monkeypatch) -> None:
+    monkeypatch.setattr("multi_agent_rag.api.main.create_document_ingestion_service", MagicMock())
     client = TestClient(build_app())
 
     response = client.post(
@@ -193,6 +234,19 @@ def test_upload_document_rejects_unsupported_extension() -> None:
 
     assert response.status_code == 400
     assert "Unsupported document extension" in response.json()["detail"]
+
+
+def test_document_status_endpoint_returns_processing_state(monkeypatch) -> None:
+    service = MagicMock()
+    service.get.return_value = fake_document()
+    monkeypatch.setattr("multi_agent_rag.api.main.create_document_ingestion_service", lambda: service)
+    client = TestClient(build_app())
+
+    response = client.get("/documents/507f1f77bcf86cd799439011")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "processing"
+    assert response.json()["progress_percentage"] == 0
 
 
 def test_stream_endpoint_returns_all_events() -> None:

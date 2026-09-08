@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
 import json
 import re
 from uuid import uuid4
@@ -9,7 +10,7 @@ from pathlib import Path
 from time import sleep
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -18,9 +19,11 @@ from multi_agent_rag.documents import load_document
 from multi_agent_rag.documents import SUPPORTED_EXTENSIONS
 from multi_agent_rag.evaluation import EvalReport, run_evaluation
 from multi_agent_rag.integrations import check_integrations
+from multi_agent_rag.ingestion import DocumentIngestionService
 from multi_agent_rag.models import AgentResult, SearchResult, WorkflowResult
 from multi_agent_rag.observability import metrics_registry
 from multi_agent_rag.orchestration import create_workflow
+from multi_agent_rag.persistence import ChunkRepository, DocumentRecord, DocumentRepository, MongoStore
 from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.factory import create_retriever
 
@@ -29,6 +32,7 @@ DEFAULT_EVAL_CASES_PATH = Path("examples/eval_cases.json")
 UPLOAD_DIR = Path("output/uploads")
 STREAM_DELTA_CHARS = 120
 STREAM_DELTA_DELAY_SECONDS = 0.02
+MONGO_STORE = MongoStore()
 
 
 class QueryRequest(BaseModel):
@@ -54,9 +58,24 @@ class UploadResponse(BaseModel):
     """API response for uploaded local documents."""
 
     filename: str
+    document_id: str
     document_path: str
     content_type: str | None
     size_bytes: int
+    status: str
+    duplicate: bool
+
+
+class DocumentStatusResponse(BaseModel):
+    """Current state of a persistently registered document."""
+
+    document_id: str
+    filename: str
+    document_path: str
+    status: str
+    progress_percentage: int
+    current_stage: str
+    stage_details: str
 
 
 def build_app() -> FastAPI:
@@ -92,8 +111,19 @@ def build_app() -> FastAPI:
         return check_integrations(probe_services=True).to_dict()
 
     @app.post("/documents/upload")
-    async def upload_document(file: UploadFile = File(...)) -> dict[str, Any]:
-        return (await save_uploaded_document(file)).model_dump()
+    async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)) -> dict[str, Any]:
+        service = create_document_ingestion_service()
+        return (await save_uploaded_document(file, background_tasks, service)).model_dump()
+
+    @app.get("/documents/{document_id}")
+    def document_status(document_id: str) -> dict[str, Any]:
+        try:
+            document = create_document_ingestion_service().get(document_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if document is None:
+            raise HTTPException(status_code=404, detail=f"Document not found: {document_id}")
+        return document_status_payload(document).model_dump()
 
     @app.post("/evaluate")
     def evaluate(request: EvaluationRequest) -> dict[str, Any]:
@@ -165,7 +195,18 @@ def run_query(
             close()
 
 
-async def save_uploaded_document(file: UploadFile) -> UploadResponse:
+def create_document_ingestion_service() -> DocumentIngestionService:
+    return DocumentIngestionService(
+        DocumentRepository.from_store(MONGO_STORE),
+        ChunkRepository.from_store(MONGO_STORE),
+    )
+
+
+async def save_uploaded_document(
+    file: UploadFile,
+    background_tasks: BackgroundTasks,
+    service: DocumentIngestionService,
+) -> UploadResponse:
     filename = Path(file.filename or "").name
     if not filename:
         raise HTTPException(status_code=400, detail="Uploaded file must have a filename.")
@@ -183,11 +224,39 @@ async def save_uploaded_document(file: UploadFile) -> UploadResponse:
     safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(filename).stem).strip(".-") or "document"
     saved_path = UPLOAD_DIR / f"{safe_stem}-{uuid4().hex[:8]}{extension}"
     saved_path.write_bytes(content)
+    registered = service.register(
+        title=filename,
+        file_type=extension.lstrip("."),
+        file_path=str(saved_path),
+        file_size=len(content),
+        file_hash=sha256(content).hexdigest(),
+        metadata={"content_type": file.content_type},
+    )
+    document = registered.document
+    if registered.duplicate:
+        saved_path.unlink(missing_ok=True)
+    else:
+        background_tasks.add_task(service.process, document.document_id, document.file_path)
     return UploadResponse(
-        filename=filename,
-        document_path=str(saved_path),
-        content_type=file.content_type,
-        size_bytes=len(content),
+        filename=document.title,
+        document_id=document.document_id,
+        document_path=document.file_path,
+        content_type=str(document.metadata.get("content_type") or "") or None,
+        size_bytes=document.file_size,
+        status=document.status.value,
+        duplicate=registered.duplicate,
+    )
+
+
+def document_status_payload(document: DocumentRecord) -> DocumentStatusResponse:
+    return DocumentStatusResponse(
+        document_id=document.document_id,
+        filename=document.title,
+        document_path=document.file_path,
+        status=document.status.value,
+        progress_percentage=document.progress_percentage,
+        current_stage=document.current_stage,
+        stage_details=document.stage_details,
     )
 
 

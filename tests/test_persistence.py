@@ -6,7 +6,8 @@ from unittest.mock import MagicMock
 
 from bson import ObjectId
 
-from multi_agent_rag.persistence import ConversationRepository, DocumentRepository, DocumentStatus, MongoSettings
+from multi_agent_rag.models import Chunk, ChunkType
+from multi_agent_rag.persistence import ChunkRepository, ConversationRepository, DocumentRepository, DocumentStatus, MongoSettings
 
 
 def test_mongo_settings_load_from_environment(monkeypatch) -> None:
@@ -111,3 +112,24 @@ def test_conversation_repository_rejects_invalid_message() -> None:
         assert "role" in str(exc)
     else:
         raise AssertionError("Expected an invalid role to be rejected.")
+
+
+def test_chunk_repository_replaces_document_chunks() -> None:
+    collection = MagicMock()
+    chunks = [
+        Chunk(
+            document_id="document-id",
+            chunk_id="chunk-1",
+            text="Retrieved evidence",
+            chunk_type=ChunkType.PROSE,
+            index=0,
+            metadata={"title": "Notes"},
+        )
+    ]
+
+    records = ChunkRepository(collection).replace_document_chunks("document-id", chunks)
+
+    collection.delete_many.assert_called_once_with({"document_id": "document-id"})
+    collection.insert_many.assert_called_once()
+    assert records[0].chunk_id == "chunk-1"
+    assert records[0].chunk_type == "prose"
