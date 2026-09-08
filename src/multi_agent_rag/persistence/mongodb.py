@@ -1,0 +1,250 @@
+"""MongoDB connection and repositories for persistent application state."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
+from uuid import uuid4
+
+from bson import ObjectId
+from bson.errors import InvalidId
+from pymongo import MongoClient
+from pymongo.collection import Collection
+from pymongo.database import Database
+
+from multi_agent_rag.persistence.models import ConversationMessage, ConversationRecord, DocumentRecord, DocumentStatus
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+@dataclass(frozen=True)
+class MongoSettings:
+    """MongoDB connection settings loaded from the environment."""
+
+    uri: str = "mongodb://localhost:27017"
+    database: str = "multi_agent_rag"
+    server_selection_timeout_ms: int = 3000
+
+    @classmethod
+    def from_env(cls) -> "MongoSettings":
+        return cls(
+            uri=os.getenv("MONGODB_URI") or "mongodb://localhost:27017",
+            database=os.getenv("MONGODB_DATABASE") or "multi_agent_rag",
+            server_selection_timeout_ms=int(os.getenv("MONGODB_SERVER_SELECTION_TIMEOUT_MS", "3000")),
+        )
+
+
+class MongoStore:
+    """Own a lazy MongoDB client and expose named collections."""
+
+    def __init__(self, settings: MongoSettings | None = None) -> None:
+        self.settings = settings or MongoSettings.from_env()
+        self._client: MongoClient[dict[str, Any]] | None = None
+        self._database: Database[dict[str, Any]] | None = None
+
+    def connect(self) -> Database[dict[str, Any]]:
+        if self._database is None:
+            self._client = MongoClient(
+                self.settings.uri,
+                serverSelectionTimeoutMS=self.settings.server_selection_timeout_ms,
+            )
+            self._client.admin.command("ping")
+            self._database = self._client[self.settings.database]
+        return self._database
+
+    def collection(self, name: str) -> Collection[dict[str, Any]]:
+        if not name.strip():
+            raise ValueError("Collection name must not be empty.")
+        return self.connect()[name]
+
+    def close(self) -> None:
+        if self._client is not None:
+            self._client.close()
+        self._client = None
+        self._database = None
+
+
+class DocumentRepository:
+    """Persist document metadata and ingestion progress."""
+
+    def __init__(self, collection: Collection[dict[str, Any]]) -> None:
+        self.collection = collection
+
+    @classmethod
+    def from_store(cls, store: MongoStore) -> "DocumentRepository":
+        return cls(store.collection("documents"))
+
+    def create(
+        self,
+        *,
+        title: str,
+        file_type: str,
+        file_path: str,
+        file_size: int,
+        file_hash: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> DocumentRecord:
+        now = utc_now()
+        payload: dict[str, Any] = {
+            "title": title,
+            "file_type": file_type,
+            "file_path": file_path,
+            "file_size": file_size,
+            "file_hash": file_hash,
+            "metadata": metadata or {},
+            "status": DocumentStatus.PROCESSING.value,
+            "progress_percentage": 0,
+            "current_stage": "upload",
+            "stage_details": "",
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = self.collection.insert_one(payload)
+        payload["_id"] = result.inserted_id
+        return _document_record(payload)
+
+    def get(self, document_id: str) -> DocumentRecord | None:
+        document = self.collection.find_one(_document_filter(document_id))
+        return _document_record(document) if document else None
+
+    def find_duplicate(self, file_hash: str) -> DocumentRecord | None:
+        document = self.collection.find_one({"file_hash": file_hash})
+        return _document_record(document) if document else None
+
+    def update_status(self, document_id: str, status: DocumentStatus, details: str = "") -> bool:
+        fields: dict[str, Any] = {"status": status.value, "updated_at": utc_now()}
+        if details:
+            fields["stage_details"] = details
+        if status is DocumentStatus.COMPLETED:
+            fields.update({"progress_percentage": 100, "current_stage": "completed"})
+        elif status is DocumentStatus.FAILED:
+            fields["current_stage"] = "failed"
+        result = self.collection.update_one(_document_filter(document_id), {"$set": fields})
+        return result.matched_count > 0
+
+    def update_progress(self, document_id: str, percentage: int, stage: str, details: str = "") -> bool:
+        if not 0 <= percentage <= 100:
+            raise ValueError("Document progress must be between 0 and 100.")
+        result = self.collection.update_one(
+            _document_filter(document_id),
+            {
+                "$set": {
+                    "progress_percentage": percentage,
+                    "current_stage": stage,
+                    "stage_details": details,
+                    "updated_at": utc_now(),
+                }
+            },
+        )
+        return result.matched_count > 0
+
+
+class ConversationRepository:
+    """Persist conversations and their ordered messages."""
+
+    def __init__(self, collection: Collection[dict[str, Any]]) -> None:
+        self.collection = collection
+
+    @classmethod
+    def from_store(cls, store: MongoStore) -> "ConversationRepository":
+        return cls(store.collection("conversations"))
+
+    def create(self, title: str = "New conversation", assistant_id: str | None = None) -> ConversationRecord:
+        now = utc_now()
+        payload: dict[str, Any] = {
+            "_id": str(uuid4()),
+            "title": title.strip() or "New conversation",
+            "assistant_id": assistant_id,
+            "messages": [],
+            "created_at": now,
+            "updated_at": now,
+        }
+        self.collection.insert_one(payload)
+        return _conversation_record(payload)
+
+    def get(self, conversation_id: str) -> ConversationRecord | None:
+        conversation = self.collection.find_one({"_id": conversation_id})
+        return _conversation_record(conversation) if conversation else None
+
+    def list(self, *, skip: int = 0, limit: int = 100) -> list[ConversationRecord]:
+        if skip < 0 or not 1 <= limit <= 100:
+            raise ValueError("Conversation pagination is out of range.")
+        cursor = self.collection.find({}).sort("updated_at", -1).skip(skip).limit(limit)
+        return [_conversation_record(conversation) for conversation in cursor]
+
+    def add_message(
+        self,
+        conversation_id: str,
+        *,
+        role: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> ConversationMessage:
+        if role not in {"user", "assistant"}:
+            raise ValueError("Conversation message role must be 'user' or 'assistant'.")
+        if not content.strip():
+            raise ValueError("Conversation message content must not be empty.")
+        message = {
+            "message_id": str(uuid4()),
+            "role": role,
+            "content": content.strip(),
+            "timestamp": utc_now(),
+            "metadata": metadata or {},
+        }
+        result = self.collection.update_one(
+            {"_id": conversation_id},
+            {"$push": {"messages": message}, "$set": {"updated_at": message["timestamp"]}},
+        )
+        if result.matched_count == 0:
+            raise KeyError(f"Conversation not found: {conversation_id}")
+        return _conversation_message(message)
+
+
+def _document_filter(document_id: str) -> dict[str, ObjectId]:
+    try:
+        return {"_id": ObjectId(document_id)}
+    except InvalidId as exc:
+        raise ValueError(f"Invalid document ID: {document_id}") from exc
+
+
+def _document_record(document: dict[str, Any]) -> DocumentRecord:
+    return DocumentRecord(
+        document_id=str(document["_id"]),
+        title=str(document["title"]),
+        file_type=str(document["file_type"]),
+        file_path=str(document["file_path"]),
+        file_size=int(document["file_size"]),
+        file_hash=str(document["file_hash"]),
+        status=DocumentStatus(str(document["status"])),
+        progress_percentage=int(document.get("progress_percentage", 0)),
+        current_stage=str(document.get("current_stage", "")),
+        stage_details=str(document.get("stage_details", "")),
+        created_at=document["created_at"],
+        updated_at=document["updated_at"],
+        metadata=dict(document.get("metadata") or {}),
+    )
+
+
+def _conversation_message(message: dict[str, Any]) -> ConversationMessage:
+    return ConversationMessage(
+        message_id=str(message["message_id"]),
+        role=str(message["role"]),
+        content=str(message["content"]),
+        timestamp=message["timestamp"],
+        metadata=dict(message.get("metadata") or {}),
+    )
+
+
+def _conversation_record(conversation: dict[str, Any]) -> ConversationRecord:
+    return ConversationRecord(
+        conversation_id=str(conversation["_id"]),
+        title=str(conversation.get("title") or "New conversation"),
+        assistant_id=conversation.get("assistant_id"),
+        messages=[_conversation_message(message) for message in conversation.get("messages", [])],
+        created_at=conversation["created_at"],
+        updated_at=conversation["updated_at"],
+    )

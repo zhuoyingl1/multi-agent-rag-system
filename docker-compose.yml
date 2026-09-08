@@ -1,4 +1,11 @@
 services:
+  mongodb:
+    image: mongo:8.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data_v8:/data/db
+
   qdrant:
     image: qdrant/qdrant:v1.19.0
     ports:
@@ -18,5 +25,6 @@ services:
       - neo4j_data_v526:/data
 
 volumes:
+  mongodb_data_v8:
   qdrant_storage_v119:
   neo4j_data_v526:
