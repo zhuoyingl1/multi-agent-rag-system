@@ -6,6 +6,8 @@ import importlib.util
 import json
 import os
 from dataclasses import asdict, dataclass
+from urllib import request as urlrequest
+from urllib.error import HTTPError, URLError
 
 
 @dataclass(frozen=True)
@@ -31,8 +33,8 @@ class IntegrationConfig:
             neo4j_user=os.getenv("NEO4J_USER") or "neo4j",
             neo4j_database=os.getenv("NEO4J_DATABASE") or "neo4j",
             reranker_model=os.getenv("RERANKER_MODEL"),
-            llm_answer_provider=os.getenv("LLM_ANSWER_PROVIDER"),
-            llm_answer_model=os.getenv("LLM_ANSWER_MODEL"),
+            llm_answer_provider=os.getenv("LLM_ANSWER_PROVIDER") or "ollama",
+            llm_answer_model=os.getenv("LLM_ANSWER_MODEL") or "qwen2.5:3b",
             ollama_base_url=os.getenv("OLLAMA_BASE_URL") or "http://127.0.0.1:11434",
         )
 
@@ -66,7 +68,7 @@ class IntegrationReport:
         return json.dumps(self.to_dict(), indent=2, ensure_ascii=False)
 
 
-def check_integrations(config: IntegrationConfig | None = None) -> IntegrationReport:
+def check_integrations(config: IntegrationConfig | None = None, probe_services: bool = False) -> IntegrationReport:
     current = config or IntegrationConfig.from_env()
     statuses = [
         IntegrationStatus(
@@ -93,7 +95,12 @@ def check_integrations(config: IntegrationConfig | None = None) -> IntegrationRe
             config_note="Set NEO4J_URI and NEO4J_USER to enable this path.",
         ),
         _reranker_status(current.reranker_model),
-        _llm_answer_status(current.llm_answer_provider, current.llm_answer_model, current.ollama_base_url),
+        _llm_answer_status(
+            current.llm_answer_provider,
+            current.llm_answer_model,
+            current.ollama_base_url,
+            probe_service=probe_services,
+        ),
         _status(
             name="langgraph",
             role="Production multi-agent orchestration graph",
@@ -173,11 +180,18 @@ def _reranker_status(model_name: str | None) -> IntegrationStatus:
     )
 
 
-def _llm_answer_status(provider: str | None, model_name: str | None, ollama_base_url: str | None) -> IntegrationStatus:
+def _llm_answer_status(
+    provider: str | None,
+    model_name: str | None,
+    ollama_base_url: str | None,
+    probe_service: bool = False,
+) -> IntegrationStatus:
     role = "LLM answer composition from retrieved evidence"
     selected = (provider or "").lower()
     if selected == "ollama":
         configured = bool(model_name)
+        if configured and probe_service:
+            return _probe_ollama_status(role, str(model_name), ollama_base_url or "http://127.0.0.1:11434")
         return IntegrationStatus(
             name="llm_answer",
             role=role,
@@ -199,4 +213,45 @@ def _llm_answer_status(provider: str | None, model_name: str | None, ollama_base
         configured=False,
         package_available=True,
         notes="Set LLM_ANSWER_PROVIDER=ollama and LLM_ANSWER_MODEL to enable this path.",
+    )
+
+
+def _probe_ollama_status(role: str, model_name: str, base_url: str) -> IntegrationStatus:
+    url = f"{base_url.rstrip('/')}/api/tags"
+    try:
+        with urlrequest.urlopen(url, timeout=2.0) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        return _ollama_unavailable(role, model_name, base_url, f"HTTP {exc.code}")
+    except (URLError, TimeoutError, OSError) as exc:
+        return _ollama_unavailable(role, model_name, base_url, exc.__class__.__name__)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        return _ollama_unavailable(role, model_name, base_url, exc.__class__.__name__)
+
+    models = {str(item.get("name", "")) for item in payload.get("models", []) if isinstance(item, dict)}
+    model_ready = model_name in models
+    return IntegrationStatus(
+        name="llm_answer",
+        role=role,
+        status="ready" if model_ready else "missing_model",
+        required_package=None,
+        configured=True,
+        package_available=True,
+        notes=(
+            f"Ollama is reachable at {base_url} and model {model_name} is available."
+            if model_ready
+            else f"Ollama is reachable at {base_url}, but model {model_name} was not found. Run 'ollama pull {model_name}'."
+        ),
+    )
+
+
+def _ollama_unavailable(role: str, model_name: str, base_url: str, reason: str) -> IntegrationStatus:
+    return IntegrationStatus(
+        name="llm_answer",
+        role=role,
+        status="unavailable",
+        required_package=None,
+        configured=True,
+        package_available=False,
+        notes=f"Ollama model {model_name} is configured, but {base_url} is not reachable: {reason}.",
     )

@@ -406,7 +406,8 @@ textarea:focus {
 }
 
 .integrationItem strong,
-.integrationItem span {
+.integrationItem span,
+.integrationItem p {
   display: block;
 }
 
@@ -418,6 +419,12 @@ textarea:focus {
   margin-top: 4px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.integrationItem p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .statusPill {
@@ -434,9 +441,15 @@ textarea:focus {
 }
 
 .statusPill.missing_config,
-.statusPill.missing_package {
+.statusPill.missing_package,
+.statusPill.missing_model {
   background: #fdf5ed;
   color: var(--accent);
+}
+
+.statusPill.unavailable {
+  background: #fff6f5;
+  color: var(--danger);
 }
 
 .evaluationHeader {

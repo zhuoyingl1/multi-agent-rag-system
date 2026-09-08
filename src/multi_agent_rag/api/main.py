@@ -89,7 +89,7 @@ def build_app() -> FastAPI:
 
     @app.get("/health/integrations")
     def health_integrations() -> dict[str, Any]:
-        return check_integrations().to_dict()
+        return check_integrations(probe_services=True).to_dict()
 
     @app.post("/documents/upload")
     async def upload_document(file: UploadFile = File(...)) -> dict[str, Any]:

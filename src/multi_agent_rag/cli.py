@@ -56,6 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     integrations_parser = subparsers.add_parser("integrations", help="Show optional production integration readiness.")
     integrations_parser.add_argument("--json", action="store_true", help="Print the readiness report as JSON.")
+    integrations_parser.add_argument("--probe-services", action="store_true", help="Probe local service endpoints such as Ollama.")
     integrations_parser.set_defaults(func=run_integrations)
 
     graph_parser = subparsers.add_parser("graph", help="Index a document into Neo4j and inspect related entities.")
@@ -155,7 +156,7 @@ def run_eval(args: argparse.Namespace) -> int:
 
 
 def run_integrations(args: argparse.Namespace) -> int:
-    report = check_integrations()
+    report = check_integrations(probe_services=args.probe_services)
     if args.json:
         print(report.to_json())
         return 0

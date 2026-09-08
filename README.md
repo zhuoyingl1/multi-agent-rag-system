@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 26 makes API and frontend queries use local Ollama answer composition by default while preserving deterministic CLI fallbacks for tests.
+Step 27 adds live Ollama readiness checks so API and frontend demos can show whether the local answer model is reachable.
 
 ## Implemented Capabilities
 
@@ -42,6 +42,7 @@ Step 26 makes API and frontend queries use local Ollama answer composition by de
 - Neo4j graph adapter for document chunk and entity relationship indexing
 - Configurable reranking wrapper for local, Qdrant, and BGE-style candidate reranking
 - Local Ollama answer composer with API/frontend LLM answer enforcement and answer provider metrics
+- Live Ollama service and model readiness reporting in the integration dashboard
 
 ## Planned Capabilities
 

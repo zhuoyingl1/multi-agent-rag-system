@@ -15,6 +15,7 @@ This guide summarizes the runnable demo paths and expected outputs for the Multi
 - Clean answer-only final responses with evidence, sources, and metrics exposed separately
 - Evidence sufficiency fallback for unsupported or low-evidence queries
 - Local Ollama answer composition for API and frontend natural-language answers
+- Live Ollama service and model readiness checks for web demos
 - FastAPI query, streaming, health, metrics, integration readiness, and evaluation endpoints
 - Next.js console for document queries, streaming answers, sources, metrics, integrations, and evaluation
 - Deterministic evaluation runner for local regression testing
@@ -32,7 +33,7 @@ python -m pytest -q
 Expected test result:
 
 ```text
-77 passed
+81 passed
 ```
 
 The exact runtime can vary by machine.
@@ -207,16 +208,16 @@ Expected local output:
 
 ```text
 mode: local_with_optional_integrations
-ready: 4/5
+ready: 5/6
 local_hybrid_store: ready
 qdrant: ready
 neo4j: ready
 bge_reranker: missing_config
-llm_answer: missing_config
+llm_answer: ready
 langgraph: ready
 ```
 
-The exact ready count depends on installed packages and environment variables. Qdrant and Neo4j are configured by default through `docker-compose.yml`; BGE reranking becomes ready after `RERANKER_MODEL` is set and `sentence-transformers` is installed. Local LLM answer composition becomes ready after `LLM_ANSWER_PROVIDER=ollama` and `LLM_ANSWER_MODEL` are set.
+The exact ready count depends on installed packages, environment variables, and running services. Qdrant and Neo4j are configured by default through `docker-compose.yml`; BGE reranking becomes ready after `RERANKER_MODEL` is set and `sentence-transformers` is installed. API integration readiness probes the local Ollama `/api/tags` endpoint and reports `llm_answer: ready` only when the configured answer model is installed.
 
 ## API Demo
 

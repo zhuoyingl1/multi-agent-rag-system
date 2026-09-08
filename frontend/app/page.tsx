@@ -455,6 +455,7 @@ export default function Home() {
                   <strong>{item.name}</strong>
                   <span>{item.required_package ?? "built-in"}</span>
                 </div>
+                <p>{item.notes}</p>
                 <span className={`statusPill ${item.status}`}>{item.status}</span>
               </article>
             ))}

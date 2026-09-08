@@ -236,7 +236,18 @@ def test_metrics_endpoint_updates_after_query() -> None:
     assert response.json()["run_count"] >= 1
 
 
-def test_integrations_endpoint_returns_readiness() -> None:
+def test_integrations_endpoint_returns_readiness(monkeypatch) -> None:
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback):
+            return False
+
+        def read(self):
+            return b'{"models":[{"name":"qwen2.5:3b"}]}'
+
+    monkeypatch.setattr("multi_agent_rag.integrations.urlrequest.urlopen", lambda _url, timeout: FakeResponse())
     client = TestClient(build_app())
 
     response = client.get("/health/integrations")
