@@ -13,6 +13,7 @@ import {
   Radio,
   RefreshCw,
   Send,
+  Trash2,
   Upload,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
@@ -50,6 +51,8 @@ type UploadResponse = {
 
 type DocumentStatusResponse = {
   document_id: string;
+  filename: string;
+  document_path: string;
   status: string;
   progress_percentage: number;
   current_stage: string;
@@ -63,6 +66,13 @@ type DocumentStatusResponse = {
   indexed_at: string | null;
   chunk_count: number;
   index_stale: boolean;
+};
+
+type DocumentListResponse = {
+  documents: DocumentStatusResponse[];
+  total: number;
+  skip: number;
+  limit: number;
 };
 
 type ConversationResponse = {
@@ -144,6 +154,8 @@ export default function Home() {
   const [reindexing, setReindexing] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [documentStatus, setDocumentStatus] = useState<DocumentStatusResponse | null>(null);
+  const [documents, setDocuments] = useState<DocumentStatusResponse[]>([]);
+  const [deleting, setDeleting] = useState(false);
   const [hydrated, setHydrated] = useState(false);
 
   const sourceCount = result?.sources.length ?? 0;
@@ -151,7 +163,14 @@ export default function Home() {
   const answerMode = formatAnswerMode(result?.metrics);
   const answerWarning = formatAnswerWarning(result?.metrics);
   const uploadDisabled = !hydrated || uploading || !selectedFile;
-  const runDisabled = !hydrated || loading || reindexing || !query.trim() || !documentId || Boolean(documentStatus?.index_stale);
+  const runDisabled =
+    !hydrated ||
+    loading ||
+    reindexing ||
+    deleting ||
+    !query.trim() ||
+    !documentId ||
+    Boolean(documentStatus && (documentStatus.status !== "completed" || documentStatus.index_stale));
   const evaluationDisabled = !hydrated || evaluating;
   const groundingScore = useMemo(() => {
     const value = result?.metrics.grounding_score;
@@ -164,7 +183,20 @@ export default function Home() {
   }, []);
 
   async function refreshDashboard() {
-    await Promise.all([refreshMetrics(), refreshIntegrations()]);
+    await Promise.all([refreshMetrics(), refreshIntegrations(), refreshDocuments()]);
+  }
+
+  async function refreshDocuments() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/documents?limit=100`);
+      if (!response.ok) {
+        throw new Error(`Document list request failed with ${response.status}`);
+      }
+      const catalog = (await response.json()) as DocumentListResponse;
+      setDocuments(catalog.documents);
+    } catch {
+      setDocuments([]);
+    }
   }
 
   async function refreshMetrics() {
@@ -285,6 +317,7 @@ export default function Home() {
           ? `Index update required: ${uploaded.filename}`
           : `Ready: ${uploaded.filename} (${status.chunk_count} chunks)`,
       );
+      await refreshDocuments();
     } catch (caught) {
       setUploadStatus(null);
       setError(caught instanceof Error ? caught.message : "Upload failed");
@@ -330,10 +363,59 @@ export default function Home() {
       setUploadStatus(`Reindexing ${documentName}`);
       const status = await waitForDocument(documentId, documentName);
       setUploadStatus(`Ready: ${documentName} (${status.chunk_count} chunks)`);
+      await refreshDocuments();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Reindex failed");
     } finally {
       setReindexing(false);
+    }
+  }
+
+  function selectDocument(selectedDocumentId: string) {
+    const selected = documents.find((document) => document.document_id === selectedDocumentId) ?? null;
+    setDocumentId(selected?.document_id ?? "");
+    setDocumentName(selected?.filename ?? "");
+    setDocumentStatus(selected);
+    setConversationId("");
+    setResult(null);
+    setStreamedAnswer("");
+    setEvents([]);
+    setError(null);
+    if (!selected) {
+      setUploadStatus(null);
+    } else if (selected.index_stale) {
+      setUploadStatus(`Index update required: ${selected.filename}`);
+    } else if (selected.status === "completed") {
+      setUploadStatus(`Ready: ${selected.filename} (${selected.chunk_count} chunks)`);
+    } else {
+      setUploadStatus(`${selected.current_stage}: ${selected.progress_percentage}%`);
+    }
+  }
+
+  async function deleteDocument() {
+    if (!documentId || !window.confirm(`Delete ${documentName} and all of its indexed data?`)) {
+      return;
+    }
+    setDeleting(true);
+    setError(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/documents/${documentId}`, { method: "DELETE" });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, `Delete request failed with ${response.status}`));
+      }
+      setDocumentId("");
+      setDocumentName("");
+      setDocumentStatus(null);
+      setConversationId("");
+      setResult(null);
+      setStreamedAnswer("");
+      setEvents([]);
+      setUploadStatus(null);
+      await refreshDocuments();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Delete failed");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -480,7 +562,14 @@ export default function Home() {
 
           <label htmlFor="indexedDocument">Indexed document</label>
           <div className="indexedDocumentRow">
-            <input id="indexedDocument" value={documentName} placeholder="Upload a document to begin" readOnly />
+            <select id="indexedDocument" value={documentId} onChange={(event) => selectDocument(event.target.value)}>
+              <option value="">Select a document</option>
+              {documents.map((document) => (
+                <option key={document.document_id} value={document.document_id}>
+                  {document.filename} ({document.status})
+                </option>
+              ))}
+            </select>
             <button
               className="smallIconButton"
               type="button"
@@ -490,6 +579,16 @@ export default function Home() {
               title="Reindex document"
             >
               <RefreshCw className={reindexing ? "spin" : ""} size={17} />
+            </button>
+            <button
+              className="smallIconButton dangerIconButton"
+              type="button"
+              onClick={deleteDocument}
+              disabled={!hydrated || !documentId || uploading || reindexing || deleting || loading}
+              aria-label="Delete document"
+              title="Delete document"
+            >
+              {deleting ? <Loader2 className="spin" size={17} /> : <Trash2 size={17} />}
             </button>
           </div>
 

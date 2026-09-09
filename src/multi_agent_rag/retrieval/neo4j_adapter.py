@@ -54,6 +54,10 @@ class Neo4jGraphAdapter:
             session.execute_write(self._replace_document, document_id, indexed_chunks)
         return len(chunks)
 
+    def delete_document(self, document_id: str) -> None:
+        with self._get_driver().session(database=self.database) as session:
+            session.execute_write(self._delete_document, document_id)
+
     def expand_entities(self, query: str, limit: int = 8) -> list[str]:
         entities = sorted(extract_entities(query))
         if not entities:
@@ -158,6 +162,30 @@ class Neo4jGraphAdapter:
         )
         for chunk, entities in indexed_chunks:
             cls._merge_chunk(tx, chunk, entities)
+        tx.run(
+            """
+            MATCH (entity:RagEntity)
+            WHERE NOT (entity)<-[:MENTIONS]-(:RagChunk)
+            DELETE entity
+            """
+        )
+
+    @staticmethod
+    def _delete_document(tx: Any, document_id: str) -> None:
+        tx.run(
+            """
+            MATCH (:RagDocument {id: $document_id})-[:HAS_CHUNK]->(chunk:RagChunk)
+            DETACH DELETE chunk
+            """,
+            document_id=document_id,
+        )
+        tx.run(
+            """
+            MATCH (document:RagDocument {id: $document_id})
+            DETACH DELETE document
+            """,
+            document_id=document_id,
+        )
         tx.run(
             """
             MATCH (entity:RagEntity)

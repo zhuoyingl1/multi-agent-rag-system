@@ -10,6 +10,25 @@ from multi_agent_rag.models import Chunk, ChunkType
 from multi_agent_rag.persistence import ChunkRepository, ConversationRepository, DocumentRepository, DocumentStatus, MongoSettings
 
 
+class FakeCursor:
+    def __init__(self, records):
+        self.records = records
+
+    def sort(self, *_args):
+        return self
+
+    def skip(self, value):
+        self.records = self.records[value:]
+        return self
+
+    def limit(self, value):
+        self.records = self.records[:value]
+        return self
+
+    def __iter__(self):
+        return iter(self.records)
+
+
 def test_mongo_settings_load_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("MONGODB_URI", "mongodb://database:27017")
     monkeypatch.setenv("MONGODB_DATABASE", "rag_test")
@@ -115,6 +134,38 @@ def test_document_repository_reads_existing_record() -> None:
     assert record.chunk_count == 0
 
 
+def test_document_repository_lists_counts_and_deletes_records() -> None:
+    collection = MagicMock()
+    document_id = ObjectId()
+    now = datetime.now(UTC)
+    collection.find.return_value = FakeCursor(
+        [
+            {
+                "_id": document_id,
+                "title": "Guide",
+                "file_type": "md",
+                "file_path": "guide.md",
+                "file_size": 50,
+                "file_hash": "hash",
+                "status": "completed",
+                "created_at": now,
+                "updated_at": now,
+            }
+        ]
+    )
+    collection.count_documents.return_value = 1
+    collection.delete_one.return_value = SimpleNamespace(deleted_count=1)
+    repository = DocumentRepository(collection)
+
+    records = repository.list(skip=0, limit=10, status=DocumentStatus.COMPLETED)
+
+    assert [record.document_id for record in records] == [str(document_id)]
+    assert repository.count(DocumentStatus.COMPLETED) == 1
+    assert repository.delete(str(document_id)) is True
+    collection.find.assert_called_once_with({"status": "completed"})
+    collection.count_documents.assert_called_once_with({"status": "completed"})
+
+
 def test_conversation_repository_creates_and_adds_messages() -> None:
     collection = MagicMock()
     collection.update_one.return_value = SimpleNamespace(matched_count=1)
@@ -181,3 +232,15 @@ def test_chunk_repository_replaces_document_chunks() -> None:
     collection.insert_many.assert_called_once()
     assert records[0].chunk_id == "chunk-1"
     assert records[0].chunk_type == "prose"
+
+
+def test_chunk_and_conversation_repositories_delete_document_data() -> None:
+    chunks = MagicMock()
+    chunks.delete_many.return_value = SimpleNamespace(deleted_count=3)
+    conversations = MagicMock()
+    conversations.delete_many.return_value = SimpleNamespace(deleted_count=2)
+
+    assert ChunkRepository(chunks).delete_for_document("document-id") == 3
+    assert ConversationRepository(conversations).delete_for_document("document-id") == 2
+    chunks.delete_many.assert_called_once_with({"document_id": "document-id"})
+    conversations.delete_many.assert_called_once_with({"document_id": "document-id"})

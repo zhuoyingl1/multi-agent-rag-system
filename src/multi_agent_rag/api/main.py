@@ -15,7 +15,7 @@ from time import perf_counter
 from typing import Any, cast
 from uuid import uuid4
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -28,6 +28,8 @@ from multi_agent_rag.integrations import check_integrations
 from multi_agent_rag.ingestion import (
     CHUNKING_VERSION,
     INDEX_VERSION,
+    DocumentBusyError,
+    DocumentCleanupError,
     DocumentIngestionService,
     document_index_is_stale,
 )
@@ -109,6 +111,23 @@ class DocumentStatusResponse(BaseModel):
     index_stale: bool
 
 
+class DocumentListResponse(BaseModel):
+    """Paginated persistent document catalog."""
+
+    documents: list[DocumentStatusResponse]
+    total: int
+    skip: int
+    limit: int
+
+
+class DocumentDeleteResponse(BaseModel):
+    """Confirmation that a document and its indexed data were removed."""
+
+    document_id: str
+    filename: str
+    deleted: bool
+
+
 class ConversationCreateRequest(BaseModel):
     """Create a conversation scoped to one indexed document."""
 
@@ -127,7 +146,7 @@ def build_app() -> FastAPI:
             "http://127.0.0.1:3001",
         ],
         allow_credentials=False,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
 
@@ -153,6 +172,21 @@ def build_app() -> FastAPI:
         service = create_document_ingestion_service()
         return (await save_uploaded_document(file, background_tasks, service)).model_dump()
 
+    @app.get("/documents")
+    def list_documents(
+        skip: int = Query(default=0, ge=0),
+        limit: int = Query(default=50, ge=1, le=100),
+        status: DocumentStatus | None = Query(default=None),
+    ) -> dict[str, Any]:
+        repository = DocumentRepository.from_store(MONGO_STORE)
+        documents = repository.list(skip=skip, limit=limit, status=status)
+        return DocumentListResponse(
+            documents=[document_status_payload(document) for document in documents],
+            total=repository.count(status),
+            skip=skip,
+            limit=limit,
+        ).model_dump()
+
     @app.get("/documents/{document_id}")
     def document_status(document_id: str) -> dict[str, Any]:
         try:
@@ -174,10 +208,29 @@ def build_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
         except FileNotFoundError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
+        except DocumentBusyError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         background_tasks.add_task(service.process, document.document_id, document.file_path)
         return document_status_payload(document).model_dump()
+
+    @app.delete("/documents/{document_id}")
+    def delete_document(document_id: str) -> dict[str, Any]:
+        service = create_document_ingestion_service()
+        try:
+            document = service.delete(document_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+        except DocumentBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except DocumentCleanupError as exc:
+            raise HTTPException(status_code=503, detail=f"Document cleanup failed: {exc}") from exc
+        return DocumentDeleteResponse(
+            document_id=document.document_id,
+            filename=document.title,
+            deleted=True,
+        ).model_dump()
 
     @app.post("/conversations")
     def create_conversation(request: ConversationCreateRequest) -> dict[str, Any]:
@@ -387,6 +440,7 @@ def create_document_ingestion_service() -> DocumentIngestionService:
         ChunkRepository.from_store(MONGO_STORE),
         vector_index,
         graph_index,
+        ConversationRepository.from_store(MONGO_STORE),
     )
 
 

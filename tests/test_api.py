@@ -10,7 +10,13 @@ pytest.importorskip("anyio")
 from fastapi.testclient import TestClient
 
 from multi_agent_rag.api.main import build_app, run_query
-from multi_agent_rag.ingestion import CHUNKING_VERSION, INDEX_VERSION, RegisteredDocument
+from multi_agent_rag.ingestion import (
+    CHUNKING_VERSION,
+    INDEX_VERSION,
+    DocumentBusyError,
+    DocumentCleanupError,
+    RegisteredDocument,
+)
 from multi_agent_rag.persistence import ConversationMessage, ConversationRecord, DocumentRecord, DocumentStatus
 
 
@@ -439,6 +445,53 @@ def test_document_status_endpoint_returns_processing_state(monkeypatch) -> None:
     assert response.json()["index_stale"] is False
 
 
+def test_document_list_endpoint_returns_paginated_catalog(monkeypatch) -> None:
+    repository = MagicMock()
+    repository.list.return_value = [fake_document(DocumentStatus.COMPLETED)]
+    repository.count.return_value = 1
+    monkeypatch.setattr("multi_agent_rag.api.main.DocumentRepository.from_store", lambda _store: repository)
+    client = TestClient(build_app())
+
+    response = client.get("/documents?skip=0&limit=10&status=completed")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["documents"][0]["filename"] == "uploaded.md"
+    assert data["documents"][0]["chunk_count"] == 2
+    repository.list.assert_called_once_with(skip=0, limit=10, status=DocumentStatus.COMPLETED)
+    repository.count.assert_called_once_with(DocumentStatus.COMPLETED)
+
+
+def test_delete_document_endpoint_cleans_registered_document(monkeypatch) -> None:
+    service = MagicMock()
+    service.delete.return_value = fake_document(DocumentStatus.COMPLETED)
+    monkeypatch.setattr("multi_agent_rag.api.main.create_document_ingestion_service", lambda: service)
+    client = TestClient(build_app())
+
+    response = client.delete("/documents/507f1f77bcf86cd799439011")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "document_id": "507f1f77bcf86cd799439011",
+        "filename": "uploaded.md",
+        "deleted": True,
+    }
+    service.delete.assert_called_once_with("507f1f77bcf86cd799439011")
+
+
+def test_delete_document_endpoint_reports_store_failure(monkeypatch) -> None:
+    service = MagicMock()
+    service.delete.side_effect = DocumentCleanupError("Qdrant unavailable")
+    monkeypatch.setattr("multi_agent_rag.api.main.create_document_ingestion_service", lambda: service)
+    client = TestClient(build_app())
+
+    response = client.delete("/documents/507f1f77bcf86cd799439011")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Document cleanup failed: Qdrant unavailable"
+
+
 def test_reindex_endpoint_queues_existing_document(monkeypatch) -> None:
     service = MagicMock()
     service.prepare_reindex.return_value = fake_document(DocumentStatus.PROCESSING)
@@ -455,7 +508,7 @@ def test_reindex_endpoint_queues_existing_document(monkeypatch) -> None:
 
 def test_reindex_endpoint_rejects_concurrent_request(monkeypatch) -> None:
     service = MagicMock()
-    service.prepare_reindex.side_effect = RuntimeError("Document indexing is already in progress.")
+    service.prepare_reindex.side_effect = DocumentBusyError("Document indexing is already in progress.")
     monkeypatch.setattr("multi_agent_rag.api.main.create_document_ingestion_service", lambda: service)
     client = TestClient(build_app())
 

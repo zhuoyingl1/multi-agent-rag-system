@@ -108,3 +108,18 @@ def test_document_index_searches_only_the_requested_document() -> None:
     assert results[0].chunk.document_id == "doc-1"
     assert results[0].retrieval_type is RetrievalType.VECTOR
     assert results[0].highlights == ["rag", "evidence"]
+
+
+def test_document_index_deletes_only_requested_document() -> None:
+    client = FakeQdrantClient()
+    client.collections.add("document_chunks")
+    index = QdrantDocumentIndex(
+        "http://localhost:6333",
+        "document_chunks",
+        FakeEmbedder(),
+        client=client,
+    )
+
+    index.delete_document("doc-1")
+
+    assert len(client.deleted) == 1

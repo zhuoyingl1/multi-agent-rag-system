@@ -121,6 +121,19 @@ class DocumentRepository:
         document = self.collection.find_one({"file_hash": file_hash})
         return _document_record(document) if document else None
 
+    def list(self, *, skip: int = 0, limit: int = 50, status: DocumentStatus | None = None) -> list[DocumentRecord]:
+        document_filter = {"status": status.value} if status is not None else {}
+        cursor = self.collection.find(document_filter).sort("created_at", -1).skip(skip).limit(limit)
+        return [_document_record(document) for document in cursor]
+
+    def count(self, status: DocumentStatus | None = None) -> int:
+        document_filter = {"status": status.value} if status is not None else {}
+        return int(self.collection.count_documents(document_filter))
+
+    def delete(self, document_id: str) -> bool:
+        result = self.collection.delete_one(_document_filter(document_id))
+        return result.deleted_count > 0
+
     def update_status(self, document_id: str, status: DocumentStatus, details: str = "") -> bool:
         fields: dict[str, Any] = {"status": status.value, "updated_at": utc_now()}
         if details:
@@ -232,6 +245,9 @@ class ChunkRepository:
         cursor = self.collection.find({"document_id": document_id}).sort("index", 1)
         return [_chunk_record(chunk) for chunk in cursor]
 
+    def delete_for_document(self, document_id: str) -> int:
+        return int(self.collection.delete_many({"document_id": document_id}).deleted_count)
+
 
 class ConversationRepository:
     """Persist conversations and their ordered messages."""
@@ -333,6 +349,9 @@ class ConversationRepository:
         if result.matched_count == 0:
             raise KeyError(f"Conversation not found: {conversation_id}")
         return _conversation_message(messages[0]), _conversation_message(messages[1])
+
+    def delete_for_document(self, document_id: str) -> int:
+        return int(self.collection.delete_many({"document_id": document_id}).deleted_count)
 
 
 def _document_filter(document_id: str) -> dict[str, ObjectId]:

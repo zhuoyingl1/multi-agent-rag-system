@@ -1,7 +1,14 @@
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
-from multi_agent_rag.ingestion import CHUNKING_VERSION, INDEX_VERSION, DocumentIngestionService, document_index_is_stale
+from multi_agent_rag.ingestion import (
+    CHUNKING_VERSION,
+    INDEX_VERSION,
+    DocumentBusyError,
+    DocumentCleanupError,
+    DocumentIngestionService,
+    document_index_is_stale,
+)
 from multi_agent_rag.persistence import DocumentRecord, DocumentStatus
 
 
@@ -197,7 +204,7 @@ def test_prepare_reindex_rejects_concurrent_indexing(tmp_path) -> None:
 
     try:
         DocumentIngestionService(documents, MagicMock()).prepare_reindex("document-id")
-    except RuntimeError as exc:
+    except DocumentBusyError as exc:
         assert "already in progress" in str(exc)
     else:
         raise AssertionError("Expected concurrent reindex to be rejected.")
@@ -225,3 +232,80 @@ def test_document_index_staleness_tracks_pipeline_configuration() -> None:
 
     assert document_index_is_stale(current, "nomic-embed-text") is False
     assert document_index_is_stale(current, "different-model") is True
+
+
+def test_delete_removes_document_from_every_store(tmp_path) -> None:
+    path = tmp_path / "notes.md"
+    path.write_text("Evidence", encoding="utf-8")
+    document = DocumentRecord(
+        document_id="document-id",
+        title="notes.md",
+        file_type="md",
+        file_path=str(path),
+        file_size=8,
+        file_hash="hash",
+        status=DocumentStatus.COMPLETED,
+        progress_percentage=100,
+        current_stage="completed",
+        stage_details="",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    documents = MagicMock()
+    documents.get.return_value = document
+    documents.delete.return_value = True
+    chunks = MagicMock()
+    vectors = MagicMock()
+    graph = MagicMock()
+    conversations = MagicMock()
+    service = DocumentIngestionService(documents, chunks, vectors, graph, conversations)
+
+    deleted = service.delete("document-id")
+
+    assert deleted is document
+    vectors.delete_document.assert_called_once_with("document-id")
+    graph.delete_document.assert_called_once_with("document-id")
+    chunks.delete_for_document.assert_called_once_with("document-id")
+    conversations.delete_for_document.assert_called_once_with("document-id")
+    documents.delete.assert_called_once_with("document-id")
+    assert path.exists() is False
+    vectors.close.assert_called_once()
+    graph.close.assert_called_once()
+
+
+def test_delete_preserves_record_and_reports_cleanup_failure(tmp_path) -> None:
+    path = tmp_path / "notes.md"
+    path.write_text("Evidence", encoding="utf-8")
+    document = DocumentRecord(
+        document_id="document-id",
+        title="notes.md",
+        file_type="md",
+        file_path=str(path),
+        file_size=8,
+        file_hash="hash",
+        status=DocumentStatus.COMPLETED,
+        progress_percentage=100,
+        current_stage="completed",
+        stage_details="",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    documents = MagicMock()
+    documents.get.return_value = document
+    vectors = MagicMock()
+    vectors.delete_document.side_effect = RuntimeError("Qdrant unavailable")
+    service = DocumentIngestionService(documents, MagicMock(), vectors)
+
+    try:
+        service.delete("document-id")
+    except DocumentCleanupError as exc:
+        assert str(exc) == "Qdrant unavailable"
+    else:
+        raise AssertionError("Expected deletion failure to be reported.")
+
+    documents.delete.assert_not_called()
+    documents.update_status.assert_called_once_with(
+        "document-id",
+        DocumentStatus.FAILED,
+        "Deletion failed: Qdrant unavailable",
+    )

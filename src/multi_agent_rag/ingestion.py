@@ -7,13 +7,27 @@ from pathlib import Path
 from typing import Any
 
 from multi_agent_rag.documents import load_document
-from multi_agent_rag.persistence import ChunkRepository, DocumentRecord, DocumentRepository, DocumentStatus
+from multi_agent_rag.persistence import (
+    ChunkRepository,
+    ConversationRepository,
+    DocumentRecord,
+    DocumentRepository,
+    DocumentStatus,
+)
 from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.neo4j_adapter import Neo4jGraphAdapter
 from multi_agent_rag.retrieval.vector_index import QdrantDocumentIndex
 
 INDEX_VERSION = "1"
 CHUNKING_VERSION = "structured-v1"
+
+
+class DocumentBusyError(RuntimeError):
+    """Raised when a document mutation conflicts with active indexing."""
+
+
+class DocumentCleanupError(RuntimeError):
+    """Raised when one or more persistent stores cannot be cleaned."""
 
 
 @dataclass(frozen=True)
@@ -33,11 +47,13 @@ class DocumentIngestionService:
         chunks: ChunkRepository,
         vector_index: QdrantDocumentIndex | None = None,
         graph_index: Neo4jGraphAdapter | None = None,
+        conversations: ConversationRepository | None = None,
     ) -> None:
         self.documents = documents
         self.chunks = chunks
         self.vector_index = vector_index
         self.graph_index = graph_index
+        self.conversations = conversations
 
     def register(
         self,
@@ -104,11 +120,11 @@ class DocumentIngestionService:
         if document is None:
             raise KeyError(f"Document not found: {document_id}")
         if document.status is DocumentStatus.PROCESSING:
-            raise RuntimeError("Document indexing is already in progress.")
+            raise DocumentBusyError("Document indexing is already in progress.")
         if not Path(document.file_path).is_file():
             raise FileNotFoundError(f"Document file not found: {document.file_path}")
         if not self.documents.begin_indexing(document_id, "Reindex requested"):
-            raise RuntimeError("Document indexing is already in progress.")
+            raise DocumentBusyError("Document indexing is already in progress.")
         refreshed = self.documents.get(document_id)
         return refreshed or replace(
             document,
@@ -117,6 +133,34 @@ class DocumentIngestionService:
             current_stage="queued",
             stage_details="Reindex requested",
         )
+
+    def delete(self, document_id: str) -> DocumentRecord:
+        document = self.documents.get(document_id)
+        if document is None:
+            raise KeyError(f"Document not found: {document_id}")
+        if document.status is DocumentStatus.PROCESSING:
+            raise DocumentBusyError("Document indexing is in progress and cannot be deleted.")
+
+        try:
+            if self.vector_index is not None:
+                self.vector_index.delete_document(document_id)
+            if self.graph_index is not None:
+                self.graph_index.delete_document(document_id)
+            self.chunks.delete_for_document(document_id)
+            if self.conversations is not None:
+                self.conversations.delete_for_document(document_id)
+            Path(document.file_path).unlink(missing_ok=True)
+            if not self.documents.delete(document_id):
+                raise RuntimeError("Document record could not be deleted.")
+            return document
+        except Exception as exc:
+            self.documents.update_status(document_id, DocumentStatus.FAILED, f"Deletion failed: {exc}")
+            raise DocumentCleanupError(str(exc)) from exc
+        finally:
+            if self.vector_index is not None:
+                self.vector_index.close()
+            if self.graph_index is not None:
+                self.graph_index.close()
 
 
 def document_index_is_stale(document: DocumentRecord, embedding_model: str) -> bool:

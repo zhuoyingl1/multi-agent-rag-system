@@ -78,6 +78,9 @@ class QdrantDocumentIndex:
         terms = tokenize(query)
         return [self._search_result(point, terms) for point in points]
 
+    def delete_document(self, document_id: str) -> None:
+        self._delete_document(document_id)
+
     def close(self) -> None:
         if hasattr(self.client, "close"):
             self.client.close()

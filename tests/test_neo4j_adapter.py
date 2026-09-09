@@ -93,6 +93,24 @@ def test_neo4j_adapter_replaces_document_graph_before_indexing() -> None:
     assert driver.tx.writes[-1] == {}
 
 
+def test_neo4j_adapter_deletes_document_graph() -> None:
+    driver = FakeDriver()
+    adapter = Neo4jGraphAdapter(
+        uri="bolt://localhost:7687",
+        user="neo4j",
+        password="password123",
+        driver=driver,
+    )
+
+    adapter.delete_document("document-id")
+
+    assert driver.tx.writes == [
+        {"document_id": "document-id"},
+        {"document_id": "document-id"},
+        {},
+    ]
+
+
 def test_neo4j_adapter_retrieves_document_scoped_chunk_matches() -> None:
     driver = FakeDriver()
     adapter = Neo4jGraphAdapter(

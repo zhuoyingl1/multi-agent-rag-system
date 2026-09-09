@@ -47,6 +47,8 @@ The application now supports persistent, versioned document indexing across Mong
 - Document-scoped vectors in Qdrant and entity relationships in Neo4j
 - Index version metadata with stale-index detection and explicit reindexing
 - Idempotent replacement of MongoDB chunks, Qdrant vectors, and Neo4j graph nodes
+- Paginated document catalog with status filtering
+- Cross-store document deletion for files, chunks, vectors, graph nodes, and conversations
 - Persistent document-scoped conversations with context-aware follow-up queries
 - Token-level Ollama answer streaming over SSE
 - Source citations with page, line, row, section, and JSON-path locators
