@@ -565,6 +565,25 @@ def test_document_status_endpoint_returns_processing_state(monkeypatch) -> None:
     assert response.json()["index_stale"] is False
 
 
+def test_document_progress_stream_emits_changed_and_terminal_states(monkeypatch) -> None:
+    repository = MagicMock()
+    repository.get.side_effect = [
+        fake_document(),
+        replace(fake_document(), progress_percentage=20, current_stage="parsing"),
+        fake_document(DocumentStatus.COMPLETED),
+    ]
+    monkeypatch.setattr("multi_agent_rag.api.main.DocumentRepository.from_store", lambda _store: repository)
+    client = TestClient(build_app())
+
+    response = client.get("/documents/507f1f77bcf86cd799439011/progress/stream")
+
+    assert response.status_code == 200
+    assert "event: progress" in response.text
+    assert '"progress_percentage": 20' in response.text
+    assert "event: complete" in response.text
+    assert '"status": "completed"' in response.text
+
+
 def test_document_list_endpoint_returns_paginated_catalog(monkeypatch) -> None:
     repository = MagicMock()
     repository.list.return_value = [fake_document(DocumentStatus.COMPLETED)]
@@ -702,6 +721,32 @@ def test_reindex_endpoint_rejects_concurrent_request(monkeypatch) -> None:
 
     assert response.status_code == 409
     assert "already in progress" in response.json()["detail"]
+
+
+def test_retry_endpoint_queues_failed_document(monkeypatch) -> None:
+    service = MagicMock()
+    service.prepare_retry.return_value = fake_document(DocumentStatus.PROCESSING)
+    monkeypatch.setattr("multi_agent_rag.api.main.create_document_ingestion_service", lambda: service)
+    client = TestClient(build_app())
+
+    response = client.post("/documents/507f1f77bcf86cd799439011/retry")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "processing"
+    service.prepare_retry.assert_called_once_with("507f1f77bcf86cd799439011")
+    service.process.assert_called_once()
+
+
+def test_retry_endpoint_rejects_non_failed_document(monkeypatch) -> None:
+    service = MagicMock()
+    service.prepare_retry.side_effect = ValueError("Only failed document indexing can be retried.")
+    monkeypatch.setattr("multi_agent_rag.api.main.create_document_ingestion_service", lambda: service)
+    client = TestClient(build_app())
+
+    response = client.post("/documents/507f1f77bcf86cd799439011/retry")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Only failed document indexing can be retried."
 
 
 def test_stream_endpoint_returns_all_events() -> None:

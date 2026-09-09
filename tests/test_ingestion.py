@@ -82,6 +82,7 @@ def test_ingestion_persists_chunks_in_mongodb_and_qdrant(tmp_path) -> None:
     assert chunk_count == 2
     stored_chunks = chunks.replace_document_chunks.call_args.args[1]
     vector_index.replace_document_chunks.assert_called_once_with("document-id", stored_chunks)
+    vector_index.close.assert_called_once()
     progress_calls = documents.update_progress.call_args_list
     assert progress_calls[-1].args[:3] == ("document-id", 85, "indexing")
 
@@ -208,6 +209,61 @@ def test_prepare_reindex_rejects_concurrent_indexing(tmp_path) -> None:
         assert "already in progress" in str(exc)
     else:
         raise AssertionError("Expected concurrent reindex to be rejected.")
+
+
+def test_prepare_retry_requeues_failed_document(tmp_path) -> None:
+    path = tmp_path / "notes.md"
+    path.write_text("Evidence", encoding="utf-8")
+    documents = MagicMock()
+    documents.begin_indexing.return_value = True
+    failed = DocumentRecord(
+        document_id="document-id",
+        title="notes.md",
+        file_type="md",
+        file_path=str(path),
+        file_size=8,
+        file_hash="hash",
+        status=DocumentStatus.FAILED,
+        progress_percentage=85,
+        current_stage="failed",
+        stage_details="Qdrant unavailable",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    documents.get.side_effect = [failed, None]
+
+    prepared = DocumentIngestionService(documents, MagicMock()).prepare_retry("document-id")
+
+    documents.begin_indexing.assert_called_once_with("document-id", "Retry requested")
+    assert prepared.status is DocumentStatus.PROCESSING
+    assert prepared.stage_details == "Retry requested"
+
+
+def test_prepare_retry_rejects_completed_document(tmp_path) -> None:
+    path = tmp_path / "notes.md"
+    path.write_text("Evidence", encoding="utf-8")
+    documents = MagicMock()
+    documents.get.return_value = DocumentRecord(
+        document_id="document-id",
+        title="notes.md",
+        file_type="md",
+        file_path=str(path),
+        file_size=8,
+        file_hash="hash",
+        status=DocumentStatus.COMPLETED,
+        progress_percentage=100,
+        current_stage="completed",
+        stage_details="",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+
+    try:
+        DocumentIngestionService(documents, MagicMock()).prepare_retry("document-id")
+    except ValueError as exc:
+        assert "Only failed" in str(exc)
+    else:
+        raise AssertionError("Expected retry of a completed document to be rejected.")
 
 
 def test_document_index_staleness_tracks_pipeline_configuration() -> None:

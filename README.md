@@ -51,6 +51,7 @@ The application now supports persistent, versioned document indexing across Mong
 - Cross-store document deletion for files, chunks, vectors, graph nodes, and conversations
 - Searchable, type-filtered indexed chunk previews with source locations
 - MongoDB-backed knowledge spaces with multi-document Qdrant, keyword, and Neo4j retrieval
+- SSE document progress updates with polling fallback and failed-index retry
 - Persistent document-scoped conversations with context-aware follow-up queries
 - Token-level Ollama answer streaming over SSE
 - Source citations with page, line, row, section, and JSON-path locators

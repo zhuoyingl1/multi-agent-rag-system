@@ -11,7 +11,7 @@ from queue import Queue
 import re
 from pathlib import Path
 from threading import Thread
-from time import perf_counter
+from time import monotonic, perf_counter, sleep
 from typing import Any, cast
 from uuid import uuid4
 
@@ -315,13 +315,50 @@ def build_app() -> FastAPI:
 
     @app.get("/documents/{document_id}")
     def document_status(document_id: str) -> dict[str, Any]:
-        try:
-            document = DocumentRepository.from_store(MONGO_STORE).get(document_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if document is None:
-            raise HTTPException(status_code=404, detail=f"Document not found: {document_id}")
-        return document_status_payload(document).model_dump()
+        return document_status_payload(get_document_record(document_id)).model_dump()
+
+    @app.get("/documents/{document_id}/progress")
+    def document_progress(document_id: str) -> dict[str, Any]:
+        return document_status_payload(get_document_record(document_id)).model_dump()
+
+    @app.get("/documents/{document_id}/progress/stream")
+    def document_progress_stream(document_id: str) -> StreamingResponse:
+        get_document_record(document_id)
+
+        def events():
+            interval = max(0.05, float(os.getenv("DOCUMENT_PROGRESS_POLL_SECONDS") or "0.5"))
+            deadline = monotonic() + float(os.getenv("DOCUMENT_PROGRESS_TIMEOUT_SECONDS") or "300")
+            last_state: tuple[object, ...] | None = None
+            while monotonic() < deadline:
+                document = get_document_record(document_id)
+                payload = document_status_payload(document).model_dump(mode="json")
+                state = (
+                    document.status.value,
+                    document.progress_percentage,
+                    document.current_stage,
+                    document.stage_details,
+                )
+                if document.status is DocumentStatus.COMPLETED:
+                    event = "complete"
+                elif document.status is DocumentStatus.FAILED:
+                    event = "failed"
+                else:
+                    event = "progress"
+                if state != last_state or event != "progress":
+                    yield _sse(event, payload)
+                    last_state = state
+                else:
+                    yield ": keep-alive\n\n"
+                if event != "progress":
+                    return
+                sleep(interval)
+            yield _sse("error", {"detail": "Document progress stream timed out."})
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/documents/{document_id}/chunks")
     def document_chunks(
@@ -368,6 +405,22 @@ def build_app() -> FastAPI:
         service = create_document_ingestion_service()
         try:
             document = service.prepare_reindex(document_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except DocumentBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        background_tasks.add_task(service.process, document.document_id, document.file_path)
+        return document_status_payload(document).model_dump()
+
+    @app.post("/documents/{document_id}/retry")
+    def retry_document(document_id: str, background_tasks: BackgroundTasks) -> dict[str, Any]:
+        service = create_document_ingestion_service()
+        try:
+            document = service.prepare_retry(document_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except KeyError as exc:
@@ -777,13 +830,18 @@ def configured_embedding_model() -> str:
     return os.getenv("OLLAMA_EMBEDDING_MODEL") or "nomic-embed-text"
 
 
-def get_ready_document(document_id: str) -> DocumentRecord:
+def get_document_record(document_id: str) -> DocumentRecord:
     try:
         document = DocumentRepository.from_store(MONGO_STORE).get(document_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if document is None:
         raise HTTPException(status_code=404, detail=f"Document not found: {document_id}")
+    return document
+
+
+def get_ready_document(document_id: str) -> DocumentRecord:
+    document = get_document_record(document_id)
     if document.status is not DocumentStatus.COMPLETED:
         raise HTTPException(status_code=400, detail=f"Document is not ready for queries: {document.status.value}")
     if document_index_is_stale(document, configured_embedding_model()):

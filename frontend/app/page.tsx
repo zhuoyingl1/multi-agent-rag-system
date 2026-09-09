@@ -423,10 +423,10 @@ export default function Home() {
         throw new Error(await readErrorMessage(response, `Upload request failed with ${response.status}`));
       }
       const uploaded = (await response.json()) as UploadResponse;
+      setDocumentId(uploaded.document_id);
       setDocumentName(uploaded.filename);
       setUploadStatus(`Indexing ${uploaded.filename}`);
       const status = await waitForDocument(uploaded.document_id, uploaded.filename);
-      setDocumentId(uploaded.document_id);
       setUploadStatus(
         status.index_stale
           ? `Index update required: ${uploaded.filename}`
@@ -437,32 +437,94 @@ export default function Home() {
     } catch (caught) {
       setUploadStatus(null);
       setError(caught instanceof Error ? caught.message : "Upload failed");
+      await Promise.all([refreshDocuments(), refreshKnowledgeSpaces()]);
     } finally {
       setUploading(false);
     }
   }
 
   async function waitForDocument(documentId: string, filename: string): Promise<DocumentStatusResponse> {
+    let status: DocumentStatusResponse;
+    try {
+      status = await waitForDocumentStream(documentId, filename);
+    } catch {
+      return pollDocumentStatus(documentId, filename);
+    }
+    if (status.status === "failed") {
+      throw new Error(status.stage_details || "Document indexing failed");
+    }
+    return status;
+  }
+
+  async function waitForDocumentStream(documentId: string, filename: string): Promise<DocumentStatusResponse> {
+    const response = await fetch(`${apiBaseUrl}/documents/${documentId}/progress/stream`);
+    if (!response.ok || !response.body) {
+      throw new Error(`Document progress stream failed with ${response.status}`);
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() ?? "";
+      for (const part of parts) {
+        if (part.startsWith(":")) {
+          continue;
+        }
+        const eventName = part.match(/^event: (.+)$/m)?.[1] ?? "progress";
+        const data = part.match(/^data: (.+)$/m)?.[1];
+        if (!data) {
+          continue;
+        }
+        const payload = JSON.parse(data) as DocumentStatusResponse | { detail: string };
+        if (eventName === "error") {
+          throw new Error("detail" in payload ? payload.detail : "Document progress stream failed");
+        }
+        const status = payload as DocumentStatusResponse;
+        updateDocumentProgress(status, filename);
+        if (eventName === "failed" || status.status === "failed") {
+          return status;
+        }
+        if (eventName === "complete" || status.status === "completed") {
+          return status;
+        }
+      }
+    }
+    throw new Error("Document progress stream ended before indexing completed");
+  }
+
+  async function pollDocumentStatus(documentId: string, filename: string): Promise<DocumentStatusResponse> {
     for (let attempt = 0; attempt < 120; attempt += 1) {
-      const response = await fetch(`${apiBaseUrl}/documents/${documentId}`);
+      const response = await fetch(`${apiBaseUrl}/documents/${documentId}/progress`);
       if (!response.ok) {
         throw new Error(await readErrorMessage(response, `Document status request failed with ${response.status}`));
       }
       const status = (await response.json()) as DocumentStatusResponse;
-      setDocumentStatus(status);
+      updateDocumentProgress(status, filename);
       if (status.status === "completed") {
         return status;
       }
       if (status.status === "failed") {
         throw new Error(status.stage_details || "Document indexing failed");
       }
-      setUploadStatus(`Indexing ${filename}: ${status.progress_percentage}%`);
       await new Promise((resolve) => window.setTimeout(resolve, 500));
     }
     throw new Error("Document indexing timed out");
   }
 
-  async function reindexDocument() {
+  function updateDocumentProgress(status: DocumentStatusResponse, filename: string) {
+    setDocumentStatus(status);
+    if (status.status === "processing") {
+      setUploadStatus(`${status.current_stage || "Indexing"} ${filename}: ${status.progress_percentage}%`);
+    }
+  }
+
+  async function refreshDocumentIndex() {
     if (!documentId) {
       return;
     }
@@ -472,17 +534,20 @@ export default function Home() {
     setResult(null);
     setStreamedAnswer("");
     try {
-      const response = await fetch(`${apiBaseUrl}/documents/${documentId}/reindex`, { method: "POST" });
+      const retry = documentStatus?.status === "failed";
+      const action = retry ? "retry" : "reindex";
+      const response = await fetch(`${apiBaseUrl}/documents/${documentId}/${action}`, { method: "POST" });
       if (!response.ok) {
-        throw new Error(await readErrorMessage(response, `Reindex request failed with ${response.status}`));
+        const fallback = `${retry ? "Retry" : "Reindex"} request failed with ${response.status}`;
+        throw new Error(await readErrorMessage(response, fallback));
       }
-      setUploadStatus(`Reindexing ${documentName}`);
+      setUploadStatus(`${retry ? "Retrying" : "Reindexing"} ${documentName}`);
       const status = await waitForDocument(documentId, documentName);
       setUploadStatus(`Ready: ${documentName} (${status.chunk_count} chunks)`);
       await Promise.all([refreshDocuments(), refreshKnowledgeSpaces()]);
       await loadChunkPreview(documentId);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Reindex failed");
+      setError(caught instanceof Error ? caught.message : "Document indexing request failed");
     } finally {
       setReindexing(false);
     }
@@ -774,10 +839,10 @@ export default function Home() {
             <button
               className="smallIconButton"
               type="button"
-              onClick={reindexDocument}
+              onClick={refreshDocumentIndex}
               disabled={!hydrated || !documentId || uploading || reindexing || loading}
-              aria-label="Reindex document"
-              title="Reindex document"
+              aria-label={documentStatus?.status === "failed" ? "Retry document indexing" : "Reindex document"}
+              title={documentStatus?.status === "failed" ? "Retry document indexing" : "Reindex document"}
             >
               <RefreshCw className={reindexing ? "spin" : ""} size={17} />
             </button>
@@ -810,6 +875,18 @@ export default function Home() {
             </button>
           </div>
           {uploadStatus && <div className="uploadStatus">{uploadStatus}</div>}
+          {documentStatus?.status === "processing" && (
+            <div
+              className="progressTrack"
+              role="progressbar"
+              aria-label="Document indexing progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={documentStatus.progress_percentage}
+            >
+              <span style={{ width: `${documentStatus.progress_percentage}%` }} />
+            </div>
+          )}
 
           <label htmlFor="query">Question</label>
           <textarea id="query" value={query} onChange={(event) => updateQuery(event.target.value)} rows={7} />

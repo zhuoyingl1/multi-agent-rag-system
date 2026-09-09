@@ -667,6 +667,20 @@ textarea:focus {
   font-weight: 700;
 }
 
+.progressTrack {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: #dfe8e5;
+}
+
+.progressTrack span {
+  display: block;
+  height: 100%;
+  background: var(--brand);
+  transition: width 180ms ease;
+}
+
 .compactError {
   margin-top: 12px;
   padding: 10px 12px;

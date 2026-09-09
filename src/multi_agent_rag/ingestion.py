@@ -106,6 +106,8 @@ class DocumentIngestionService:
             self.documents.update_status(document_id, DocumentStatus.FAILED, str(exc))
             return 0
         finally:
+            if self.vector_index is not None:
+                self.vector_index.close()
             if self.graph_index is not None:
                 self.graph_index.close()
 
@@ -134,6 +136,25 @@ class DocumentIngestionService:
             progress_percentage=0,
             current_stage="queued",
             stage_details="Reindex requested",
+        )
+
+    def prepare_retry(self, document_id: str) -> DocumentRecord:
+        document = self.documents.get(document_id)
+        if document is None:
+            raise KeyError(f"Document not found: {document_id}")
+        if document.status is not DocumentStatus.FAILED:
+            raise ValueError("Only failed document indexing can be retried.")
+        if not Path(document.file_path).is_file():
+            raise FileNotFoundError(f"Document file not found: {document.file_path}")
+        if not self.documents.begin_indexing(document_id, "Retry requested"):
+            raise DocumentBusyError("Document indexing is already in progress.")
+        refreshed = self.documents.get(document_id)
+        return refreshed or replace(
+            document,
+            status=DocumentStatus.PROCESSING,
+            progress_percentage=0,
+            current_stage="queued",
+            stage_details="Retry requested",
         )
 
     def delete(self, document_id: str) -> DocumentRecord:
