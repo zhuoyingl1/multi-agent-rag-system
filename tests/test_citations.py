@@ -10,7 +10,7 @@ def source(index: int) -> SearchResult:
             text=f"Evidence statement {index}.",
             chunk_type=ChunkType.PROSE,
             index=index,
-            metadata={"title": "notes.md"},
+            metadata={"title": "notes.md", "line_start": str(index + 4), "line_end": str(index + 5)},
         ),
         score=1.0 - index * 0.1,
         retrieval_type=RetrievalType.HYBRID,
@@ -20,12 +20,13 @@ def source(index: int) -> SearchResult:
 def test_evidence_context_assigns_ranked_citation_ids() -> None:
     context = format_evidence_context([source(0), source(1)])
 
-    assert "[S1] Source: notes.md; chunk: 0" in context
-    assert "[S2] Source: notes.md; chunk: 1" in context
+    assert "[S1] Source: notes.md; location: lines 4-5; chunk: 0" in context
+    assert "[S2] Source: notes.md; location: lines 5-6; chunk: 1" in context
 
 
 def test_extract_citation_ids_deduplicates_in_first_use_order() -> None:
     assert extract_citation_ids("Use [S2], then [S1], and repeat [S2].") == ["S2", "S1"]
+    assert extract_citation_ids("Combined evidence [S1, S2].") == ["S1", "S2"]
 
 
 def test_citation_diagnostics_reports_complete_and_partial_answers() -> None:
@@ -36,6 +37,7 @@ def test_citation_diagnostics_reports_complete_and_partial_answers() -> None:
 
     assert complete["status"] == "complete"
     assert complete["coverage"] == 1.0
+    assert complete["source_locators"]["S1"]["label"] == "lines 4-5"
     assert partial["status"] == "partial"
     assert partial["unused_citation_ids"] == ["S2"]
 

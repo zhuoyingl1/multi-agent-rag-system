@@ -102,6 +102,7 @@ def test_query_endpoint_returns_grounded_answer() -> None:
     assert [source["citation_id"] for source in data["sources"]] == [
         f"S{index}" for index in range(1, len(data["sources"]) + 1)
     ]
+    assert all(source["source_locator"]["label"] for source in data["sources"])
 
 
 def test_query_endpoint_uses_llm_answer_by_default(monkeypatch) -> None:

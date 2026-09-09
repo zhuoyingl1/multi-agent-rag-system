@@ -16,6 +16,7 @@ JSON_EXTENSIONS = {".json"}
 CSV_EXTENSIONS = {".csv"}
 PDF_EXTENSIONS = {".pdf"}
 SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | JSON_EXTENSIONS | CSV_EXTENSIONS | PDF_EXTENSIONS
+PDF_PAGE_BREAK_MARKER = "<!-- rag-page-break -->"
 
 
 def load_document(path: str | Path) -> Document:
@@ -37,20 +38,24 @@ def load_document(path: str | Path) -> Document:
         text = _read_csv(document_path)
         document_type = "csv"
     elif extension in PDF_EXTENSIONS:
-        text = _read_pdf(document_path)
+        text, page_count = _read_pdf(document_path)
         document_type = "pdf"
     else:
         supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
         raise ValueError(f"Unsupported document extension '{extension}'. Supported extensions: {supported}")
 
+    metadata = {
+        "source_path": str(document_path),
+        "document_type": document_type,
+        "extension": extension,
+    }
+    if extension in PDF_EXTENSIONS:
+        metadata["page_count"] = str(page_count)
+
     return Document(
         title=document_path.name,
         text=_normalize_document_text(text),
-        metadata={
-            "source_path": str(document_path),
-            "document_type": document_type,
-            "extension": extension,
-        },
+        metadata=metadata,
     )
 
 
@@ -92,25 +97,60 @@ def _read_csv(path: Path) -> str:
         return "\n".join(", ".join(cell for cell in row) for row in reader)
 
 
-def _read_pdf(path: Path) -> str:
+def _read_pdf(path: Path) -> tuple[str, int]:
     try:
         from pypdf import PdfReader
     except ImportError as exc:
         raise RuntimeError("PDF ingestion requires pypdf. Install project dependencies before loading PDF files.") from exc
 
     reader = PdfReader(str(path))
-    pages = [(page.extract_text() or "").strip() for page in reader.pages]
-    text = _normalize_extracted_text("\n\n".join(page for page in pages if page))
-    if not text:
+    pages = [_normalize_extracted_text(page.extract_text() or "") for page in reader.pages]
+    if not any(pages):
         raise ValueError(f"No extractable text found in PDF: {path}")
-    return text
+    return f"\n\n{PDF_PAGE_BREAK_MARKER}\n\n".join(pages), len(pages)
 
 
 def _normalize_extracted_text(text: str) -> str:
     text = _normalize_document_text(text)
     text = re.sub(r"([A-Za-z])-\n([A-Za-z])", r"\1\2", text)
-    text = re.sub(r"(?<![\n:])\n(?!\n|[-*] |\d+\. |\|)", " ", text)
-    return _collapse_blank_lines(text)
+    lines = text.splitlines()
+    structured: list[str] = []
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            if structured and structured[-1]:
+                structured.append("")
+            continue
+
+        next_line = lines[index + 1].strip() if index + 1 < len(lines) else ""
+        if _looks_like_pdf_boundary(stripped, next_line):
+            if structured and structured[-1]:
+                structured.append("")
+            structured.append(stripped)
+            continue
+
+        if structured and structured[-1] and _is_pdf_continuation(structured[-1], stripped):
+            structured[-1] = f"{structured[-1]} {stripped}"
+        else:
+            structured.append(stripped)
+    return _collapse_blank_lines("\n".join(structured))
+
+
+def _looks_like_pdf_boundary(line: str, next_line: str) -> bool:
+    if line.startswith(("- ", "* ", "|", "#")):
+        return False
+    if line[0].islower():
+        return False
+    if re.search(r"\b\d{2}/\d{4}\s*-\s*\d{2}/\d{4}\b", line):
+        return True
+    next_starts_lowercase = bool(next_line) and next_line[0].islower()
+    return len(line) <= 40 and len(line.split()) <= 5 and not next_starts_lowercase and not line.endswith((",", ";", ":"))
+
+
+def _is_pdf_continuation(previous: str, current: str) -> bool:
+    if current.startswith(("- ", "* ", "|", "#")):
+        return False
+    return current[0].islower() or previous.endswith((",", ";", "-"))
 
 
 def _normalize_document_text(text: str) -> str:

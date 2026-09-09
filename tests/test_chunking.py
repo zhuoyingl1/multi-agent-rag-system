@@ -34,6 +34,20 @@ def test_chunk_document_detects_structured_blocks() -> None:
     assert all(chunk.document_id == document.stable_id() for chunk in chunks)
     assert all(chunk.metadata["title"] == "notes.md" for chunk in chunks)
     assert all(chunk.metadata["source"] == "example" for chunk in chunks)
+    assert all(int(chunk.metadata["line_start"]) <= int(chunk.metadata["line_end"]) for chunk in chunks)
+
+
+def test_chunk_document_tracks_pdf_pages_without_indexing_markers() -> None:
+    document = Document(
+        title="report.pdf",
+        text="First page.\n\n<!-- rag-page-break -->\n\nSecond page.",
+        metadata={"document_type": "pdf", "page_count": "2"},
+    )
+
+    chunks = chunk_document(document)
+
+    assert [chunk.metadata["page_start"] for chunk in chunks] == ["1", "2"]
+    assert all("rag-page-break" not in chunk.text for chunk in chunks)
 
 
 def test_chunk_ids_are_stable() -> None:
@@ -55,3 +69,13 @@ def test_long_prose_is_split_without_losing_words() -> None:
     assert all(chunk.chunk_type is ChunkType.PROSE for chunk in chunks)
     assert "word0" in chunks[0].text
     assert "word119" in chunks[-1].text
+    assert set(chunks[0].text.split()) & set(chunks[1].text.split())
+
+
+def test_split_prose_keeps_the_original_line_range() -> None:
+    text = "\n".join(" ".join(f"line{line}word{word}" for word in range(20)) for line in range(1, 4))
+    chunks = StructuredChunker(max_prose_chars=240).chunk(Document(title="long.txt", text=text))
+
+    assert len(chunks) > 1
+    assert chunks[0].metadata["line_start"] == "1"
+    assert chunks[-1].metadata["line_end"] == "3"

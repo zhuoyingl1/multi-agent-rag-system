@@ -12,6 +12,9 @@ type Source = {
   retrieval_type: string;
   highlights: string[];
   text: string;
+  source_locator: {
+    label: string;
+  };
 };
 
 type QueryResponse = {
@@ -447,6 +450,7 @@ export default function Home() {
                 <div className="sourceMeta">
                   <span>[{source.citation_id}]</span>
                   <span>{source.title ?? source.chunk_id}</span>
+                  <span>{source.source_locator.label}</span>
                   <span>{source.retrieval_type}</span>
                   <span>score {source.score}</span>
                 </div>

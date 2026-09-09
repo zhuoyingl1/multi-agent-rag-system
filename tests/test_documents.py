@@ -80,6 +80,24 @@ def test_normalize_extracted_text_repairs_pdf_line_wrapping() -> None:
     assert "aug-\nmented" not in normalized
 
 
+def test_normalize_extracted_text_preserves_layout_boundaries() -> None:
+    text = (
+        "Projects\n"
+        "First Project 01/2025-02/2025\n"
+        "Tech Stack: Python\n"
+        "- Built a service,\n"
+        "then deployed it.\n"
+        "Second Project 03/2025-04/2025\n"
+        "Tech Stack: TypeScript"
+    )
+
+    normalized = _normalize_extracted_text(text)
+
+    assert "Projects\n\nFirst Project" in normalized
+    assert "deployed it.\n\nSecond Project" in normalized
+    assert "- Built a service, then deployed it." in normalized
+
+
 def test_load_text_document_applies_shared_normalization(tmp_path) -> None:
     path = tmp_path / "notes.txt"
     path.write_text("RAG\u00a0systems use \ufb02exible retrieval.\ufffd", encoding="utf-8")

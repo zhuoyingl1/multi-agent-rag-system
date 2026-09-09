@@ -16,9 +16,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from multi_agent_rag.documents import load_document
-from multi_agent_rag.citations import build_citation_diagnostics, citation_id
-from multi_agent_rag.documents import SUPPORTED_EXTENSIONS
+from multi_agent_rag.citations import build_citation_diagnostics, citation_id, source_locator
+from multi_agent_rag.documents import SUPPORTED_EXTENSIONS, load_document
 from multi_agent_rag.evaluation import EvalReport, run_evaluation
 from multi_agent_rag.integrations import check_integrations
 from multi_agent_rag.ingestion import DocumentIngestionService
@@ -432,6 +431,7 @@ def source_payload(source: SearchResult, evidence_id: str | None = None) -> dict
         "retrieval_type": source.retrieval_type.value,
         "highlights": source.highlights,
         "text": source.chunk.text,
+        "source_locator": source_locator(source),
     }
     if evidence_id is not None:
         payload["citation_id"] = evidence_id
