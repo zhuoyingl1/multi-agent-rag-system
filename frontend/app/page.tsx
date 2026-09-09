@@ -1,6 +1,20 @@
 "use client";
 
-import { Activity, BarChart3, Bot, Database, FileText, Loader2, Network, Play, Radio, RefreshCw, Send, Upload } from "lucide-react";
+import {
+  Activity,
+  BarChart3,
+  Bot,
+  Database,
+  FileText,
+  Loader2,
+  MessageSquarePlus,
+  Network,
+  Play,
+  Radio,
+  RefreshCw,
+  Send,
+  Upload,
+} from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type Source = {
@@ -21,7 +35,7 @@ type QueryResponse = {
   query: string;
   answer: string;
   sources: Source[];
-  metrics: Record<string, string | number>;
+  metrics: Record<string, string | number | boolean>;
 };
 
 type UploadResponse = {
@@ -40,6 +54,12 @@ type DocumentStatusResponse = {
   progress_percentage: number;
   current_stage: string;
   stage_details: string;
+};
+
+type ConversationResponse = {
+  conversation_id: string;
+  title: string;
+  document_id: string;
 };
 
 type HealthMetrics = {
@@ -98,6 +118,7 @@ export default function Home() {
   const [query, setQuery] = useState(defaultQuery);
   const [documentId, setDocumentId] = useState("");
   const [documentName, setDocumentName] = useState("");
+  const [conversationId, setConversationId] = useState("");
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [streamedAnswer, setStreamedAnswer] = useState("");
   const [metrics, setMetrics] = useState<HealthMetrics | null>(null);
@@ -190,13 +211,14 @@ export default function Home() {
     setStreamedAnswer("");
 
     try {
+      const activeConversationId = await ensureConversation();
       if (mode === "stream") {
-        const completed = await runStreamQuery();
+        const completed = await runStreamQuery(activeConversationId);
         if (!completed) {
           throw new Error("Stream ended before the final answer event.");
         }
       } else {
-        await runStandardQuery();
+        await runStandardQuery(activeConversationId);
       }
       await refreshDashboard();
     } catch (caught) {
@@ -210,6 +232,15 @@ export default function Home() {
     setQuery(value);
   }
 
+  function startNewConversation() {
+    setConversationId("");
+    setQuery("");
+    setResult(null);
+    setStreamedAnswer("");
+    setEvents([]);
+    setError(null);
+  }
+
   async function uploadDocument() {
     if (!selectedFile) {
       return;
@@ -219,6 +250,7 @@ export default function Home() {
     setUploadStatus(null);
     setError(null);
     setDocumentId("");
+    setConversationId("");
     setResult(null);
     setStreamedAnswer("");
     try {
@@ -264,13 +296,37 @@ export default function Home() {
     throw new Error("Document indexing timed out");
   }
 
-  async function runStandardQuery() {
+  async function ensureConversation() {
+    if (conversationId) {
+      return conversationId;
+    }
+    const response = await fetch(`${apiBaseUrl}/conversations`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ document_id: documentId, title: documentName || undefined }),
+    });
+    if (!response.ok) {
+      throw new Error(await readErrorMessage(response, `Conversation request failed with ${response.status}`));
+    }
+    const conversation = (await response.json()) as ConversationResponse;
+    setConversationId(conversation.conversation_id);
+    return conversation.conversation_id;
+  }
+
+  async function runStandardQuery(activeConversationId: string) {
     const response = await fetch(`${apiBaseUrl}/query`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ query, document_id: documentId, require_llm_answer: true }),
+      body: JSON.stringify({
+        query,
+        document_id: documentId,
+        conversation_id: activeConversationId,
+        require_llm_answer: true,
+      }),
     });
     if (!response.ok) {
       throw new Error(await readErrorMessage(response, `Query request failed with ${response.status}`));
@@ -278,13 +334,18 @@ export default function Home() {
     setResult((await response.json()) as QueryResponse);
   }
 
-  async function runStreamQuery() {
+  async function runStreamQuery(activeConversationId: string) {
     const response = await fetch(`${apiBaseUrl}/query/stream`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ query, document_id: documentId, require_llm_answer: true }),
+      body: JSON.stringify({
+        query,
+        document_id: documentId,
+        conversation_id: activeConversationId,
+        require_llm_answer: true,
+      }),
     });
     if (!response.ok || !response.body) {
       throw new Error(await readErrorMessage(response, `Stream request failed with ${response.status}`));
@@ -418,9 +479,21 @@ export default function Home() {
         </form>
 
         <section className="answerPanel">
-          <div className="sectionHeader">
-            <Bot size={18} />
-            <h2>Answer</h2>
+          <div className="sectionHeader answerHeader">
+            <div className="answerTitle">
+              <Bot size={18} />
+              <h2>Answer</h2>
+            </div>
+            <button
+              className="smallIconButton"
+              type="button"
+              onClick={startNewConversation}
+              disabled={!hydrated || loading || !documentId}
+              aria-label="Start new conversation"
+              title="Start new conversation"
+            >
+              <MessageSquarePlus size={17} />
+            </button>
           </div>
 
           {error && <div className="errorBox">{error}</div>}

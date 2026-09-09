@@ -20,6 +20,8 @@ class WorkflowRunner(Protocol):
         query: str,
         on_stage: Callable[[str, object], None] | None = None,
         on_answer_delta: Callable[[str], None] | None = None,
+        retrieval_query: str | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> WorkflowResult:
         """Run a query through the selected workflow."""
 

@@ -37,9 +37,10 @@ class SummarizerAgent:
         judge: JudgeResult,
         sources: list[SearchResult],
         on_answer_delta: Callable[[str], None] | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> str:
         successful = [result for result in agent_results if not result.error]
-        answer = self._direct_answer(query, successful, sources, on_answer_delta)
+        answer = self._direct_answer(query, successful, sources, on_answer_delta, conversation_history or [])
         if on_answer_delta is not None and self.answer_type != "llm":
             on_answer_delta(answer)
         return answer
@@ -50,6 +51,7 @@ class SummarizerAgent:
         agent_results: list[AgentResult],
         sources: list[SearchResult],
         on_answer_delta: Callable[[str], None] | None,
+        conversation_history: list[dict[str, str]],
     ) -> str:
         if not sources and not self.answer_composer:
             if self.require_llm_answer:
@@ -64,9 +66,15 @@ class SummarizerAgent:
         if self.answer_composer:
             try:
                 if on_answer_delta is None:
-                    answer = self.answer_composer.compose(query, agent_results, sources)
+                    answer = self.answer_composer.compose(query, agent_results, sources, conversation_history)
                 else:
-                    answer = self.answer_composer.compose_stream(query, agent_results, sources, on_answer_delta)
+                    answer = self.answer_composer.compose_stream(
+                        query,
+                        agent_results,
+                        sources,
+                        on_answer_delta,
+                        conversation_history,
+                    )
                 self.answer_type = "llm"
                 self.answer_model = self.answer_composer.model
                 self.answer_error = ""
@@ -229,7 +237,13 @@ class AnswerComposer:
 
     model: str
 
-    def compose(self, query: str, agent_results: list[AgentResult], sources: list[SearchResult]) -> str:
+    def compose(
+        self,
+        query: str,
+        agent_results: list[AgentResult],
+        sources: list[SearchResult],
+        conversation_history: list[dict[str, str]] | None = None,
+    ) -> str:
         raise NotImplementedError
 
     def compose_stream(
@@ -238,8 +252,9 @@ class AnswerComposer:
         agent_results: list[AgentResult],
         sources: list[SearchResult],
         on_answer_delta: Callable[[str], None],
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> str:
-        answer = self.compose(query, agent_results, sources)
+        answer = self.compose(query, agent_results, sources, conversation_history)
         on_answer_delta(answer)
         return answer
 
@@ -259,8 +274,17 @@ class OllamaAnswerComposer(AnswerComposer):
         self.timeout_seconds = timeout_seconds
         self.max_tokens = max_tokens
 
-    def compose(self, query: str, agent_results: list[AgentResult], sources: list[SearchResult]) -> str:
-        response = self._post_json("/api/chat", self._payload(query, agent_results, sources, stream=False))
+    def compose(
+        self,
+        query: str,
+        agent_results: list[AgentResult],
+        sources: list[SearchResult],
+        conversation_history: list[dict[str, str]] | None = None,
+    ) -> str:
+        response = self._post_json(
+            "/api/chat",
+            self._payload(query, agent_results, sources, stream=False, conversation_history=conversation_history),
+        )
         answer = ((response.get("message") or {}).get("content") or "").strip()
         if not answer:
             raise ValueError("Ollama returned an empty answer.")
@@ -272,9 +296,17 @@ class OllamaAnswerComposer(AnswerComposer):
         agent_results: list[AgentResult],
         sources: list[SearchResult],
         on_answer_delta: Callable[[str], None],
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> str:
         deltas: list[str] = []
-        for response in self._stream_json("/api/chat", self._payload(query, agent_results, sources, stream=True)):
+        payload = self._payload(
+            query,
+            agent_results,
+            sources,
+            stream=True,
+            conversation_history=conversation_history,
+        )
+        for response in self._stream_json("/api/chat", payload):
             delta = ((response.get("message") or {}).get("content") or "")
             if delta:
                 deltas.append(delta)
@@ -290,7 +322,13 @@ class OllamaAnswerComposer(AnswerComposer):
         agent_results: list[AgentResult],
         sources: list[SearchResult],
         stream: bool,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
+        history = [
+            {"role": message["role"], "content": message["content"]}
+            for message in conversation_history or []
+            if message.get("role") in {"user", "assistant"} and message.get("content", "").strip()
+        ]
         return {
             "model": self.model,
             "stream": stream,
@@ -304,9 +342,11 @@ class OllamaAnswerComposer(AnswerComposer):
                         "Cite every factual claim with one or more provided evidence ids such as [S1]. "
                         "Place citations at the end of the supported sentence and do not discuss citation ids in prose. "
                         "Never invent an evidence id. "
+                        "Conversation history is context only; do not reuse citation ids from earlier answers. "
                         "Use one or two short paragraphs. Say when the evidence is insufficient."
                     ),
                 },
+                *history,
                 {"role": "user", "content": self._prompt(query, agent_results, sources)},
             ],
             "options": {"temperature": 0.2, "num_predict": self.max_tokens},

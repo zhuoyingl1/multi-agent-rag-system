@@ -188,12 +188,18 @@ class ConversationRepository:
     def from_store(cls, store: MongoStore) -> "ConversationRepository":
         return cls(store.collection("conversations"))
 
-    def create(self, title: str = "New conversation", assistant_id: str | None = None) -> ConversationRecord:
+    def create(
+        self,
+        title: str = "New conversation",
+        assistant_id: str | None = None,
+        document_id: str | None = None,
+    ) -> ConversationRecord:
         now = utc_now()
         payload: dict[str, Any] = {
             "_id": str(uuid4()),
             "title": title.strip() or "New conversation",
             "assistant_id": assistant_id,
+            "document_id": document_id,
             "messages": [],
             "created_at": now,
             "updated_at": now,
@@ -237,6 +243,41 @@ class ConversationRepository:
         if result.matched_count == 0:
             raise KeyError(f"Conversation not found: {conversation_id}")
         return _conversation_message(message)
+
+    def add_turn(
+        self,
+        conversation_id: str,
+        *,
+        user_content: str,
+        assistant_content: str,
+        assistant_metadata: dict[str, Any] | None = None,
+    ) -> tuple[ConversationMessage, ConversationMessage]:
+        if not user_content.strip() or not assistant_content.strip():
+            raise ValueError("Conversation turn messages must not be empty.")
+        now = utc_now()
+        messages = [
+            {
+                "message_id": str(uuid4()),
+                "role": "user",
+                "content": user_content.strip(),
+                "timestamp": now,
+                "metadata": {},
+            },
+            {
+                "message_id": str(uuid4()),
+                "role": "assistant",
+                "content": assistant_content.strip(),
+                "timestamp": now,
+                "metadata": assistant_metadata or {},
+            },
+        ]
+        result = self.collection.update_one(
+            {"_id": conversation_id},
+            {"$push": {"messages": {"$each": messages}}, "$set": {"updated_at": now}},
+        )
+        if result.matched_count == 0:
+            raise KeyError(f"Conversation not found: {conversation_id}")
+        return _conversation_message(messages[0]), _conversation_message(messages[1])
 
 
 def _document_filter(document_id: str) -> dict[str, ObjectId]:
@@ -291,6 +332,7 @@ def _conversation_record(conversation: dict[str, Any]) -> ConversationRecord:
         conversation_id=str(conversation["_id"]),
         title=str(conversation.get("title") or "New conversation"),
         assistant_id=conversation.get("assistant_id"),
+        document_id=conversation.get("document_id"),
         messages=[_conversation_message(message) for message in conversation.get("messages", [])],
         created_at=conversation["created_at"],
         updated_at=conversation["updated_at"],

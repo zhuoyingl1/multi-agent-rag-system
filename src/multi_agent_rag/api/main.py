@@ -20,6 +20,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from multi_agent_rag.citations import build_citation_diagnostics, citation_id, source_locator
+from multi_agent_rag.conversation import contextualize_retrieval_query, recent_history
 from multi_agent_rag.documents import SUPPORTED_EXTENSIONS, load_document
 from multi_agent_rag.evaluation import EvalReport, run_evaluation
 from multi_agent_rag.integrations import check_integrations
@@ -27,7 +28,15 @@ from multi_agent_rag.ingestion import DocumentIngestionService
 from multi_agent_rag.models import AgentPlan, AgentResult, JudgeResult, SearchResult, WorkflowResult
 from multi_agent_rag.observability import metrics_registry
 from multi_agent_rag.orchestration import create_workflow
-from multi_agent_rag.persistence import ChunkRepository, DocumentRecord, DocumentRepository, DocumentStatus, MongoStore
+from multi_agent_rag.persistence import (
+    ChunkRepository,
+    ConversationRecord,
+    ConversationRepository,
+    DocumentRecord,
+    DocumentRepository,
+    DocumentStatus,
+    MongoStore,
+)
 from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.factory import create_document_retriever, create_retriever
 from multi_agent_rag.retrieval.embeddings import OllamaEmbeddingService
@@ -45,6 +54,7 @@ class QueryRequest(BaseModel):
 
     query: str = Field(min_length=1)
     document_id: str | None = None
+    conversation_id: str | None = None
     document_path: str = Field(default=str(DEFAULT_DOCUMENT_PATH), min_length=1)
     orchestrator: str = Field(default="auto", pattern="^(auto|local|langgraph)$")
     retrieval_backend: str = Field(default="qdrant", pattern="^(local|qdrant)$")
@@ -82,6 +92,13 @@ class DocumentStatusResponse(BaseModel):
     progress_percentage: int
     current_stage: str
     stage_details: str
+
+
+class ConversationCreateRequest(BaseModel):
+    """Create a conversation scoped to one indexed document."""
+
+    document_id: str = Field(min_length=1)
+    title: str | None = Field(default=None, max_length=120)
 
 
 def build_app() -> FastAPI:
@@ -130,6 +147,23 @@ def build_app() -> FastAPI:
         if document is None:
             raise HTTPException(status_code=404, detail=f"Document not found: {document_id}")
         return document_status_payload(document).model_dump()
+
+    @app.post("/conversations")
+    def create_conversation(request: ConversationCreateRequest) -> dict[str, Any]:
+        document = get_ready_document(request.document_id)
+        title = request.title or document.title
+        conversation = ConversationRepository.from_store(MONGO_STORE).create(
+            title=title,
+            document_id=document.document_id,
+        )
+        return conversation_payload(conversation)
+
+    @app.get("/conversations/{conversation_id}")
+    def get_conversation(conversation_id: str) -> dict[str, Any]:
+        conversation = ConversationRepository.from_store(MONGO_STORE).get(conversation_id)
+        if conversation is None:
+            raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")
+        return conversation_payload(conversation)
 
     @app.post("/evaluate")
     def evaluate(request: EvaluationRequest) -> dict[str, Any]:
@@ -203,24 +237,41 @@ def run_query_request(
     on_stage: Callable[[str, object], None] | None = None,
     on_answer_delta: Callable[[str], None] | None = None,
 ) -> WorkflowResult:
+    history, retrieval_query, conversations = conversation_context(request)
     if request.document_id:
-        return safe_run_document_query(
+        result = safe_run_document_query(
             request.query,
             request.document_id,
             request.orchestrator,
             request.require_llm_answer,
             on_stage,
             on_answer_delta,
+            retrieval_query,
+            history,
         )
-    return safe_run_query(
-        request.query,
-        Path(request.document_path),
-        request.orchestrator,
-        request.retrieval_backend,
-        request.require_llm_answer,
-        on_stage,
-        on_answer_delta,
-    )
+    else:
+        result = safe_run_query(
+            request.query,
+            Path(request.document_path),
+            request.orchestrator,
+            request.retrieval_backend,
+            request.require_llm_answer,
+            on_stage,
+            on_answer_delta,
+            retrieval_query,
+            history,
+        )
+    if conversations is not None and request.conversation_id is not None:
+        conversations.add_turn(
+            request.conversation_id,
+            user_content=request.query,
+            assistant_content=result.answer,
+            assistant_metadata={
+                "answer_type": result.metrics.get("answer_type", "unknown"),
+                "citation_status": result.metrics.get("citation_status", "unknown"),
+            },
+        )
+    return result
 
 
 def run_query(
@@ -231,6 +282,8 @@ def run_query(
     require_llm_answer: bool = False,
     on_stage: Callable[[str, object], None] | None = None,
     on_answer_delta: Callable[[str], None] | None = None,
+    retrieval_query: str | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
 ) -> WorkflowResult:
     document = load_document(document_path)
     retriever = create_retriever(retrieval_backend)
@@ -241,7 +294,7 @@ def run_query(
             orchestrator=orchestrator,
             require_llm_answer=require_llm_answer,
             default_answer_provider="ollama" if require_llm_answer else None,
-        ).run(query, on_stage, on_answer_delta)
+        ).run(query, on_stage, on_answer_delta, retrieval_query, conversation_history)
     finally:
         close = getattr(retriever, "close", None)
         if callable(close):
@@ -255,6 +308,8 @@ def run_document_query(
     require_llm_answer: bool = False,
     on_stage: Callable[[str, object], None] | None = None,
     on_answer_delta: Callable[[str], None] | None = None,
+    retrieval_query: str | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
 ) -> WorkflowResult:
     document = DocumentRepository.from_store(MONGO_STORE).get(document_id)
     if document is None:
@@ -269,7 +324,7 @@ def run_document_query(
             orchestrator=orchestrator,
             require_llm_answer=require_llm_answer,
             default_answer_provider="ollama" if require_llm_answer else None,
-        ).run(query, on_stage, on_answer_delta)
+        ).run(query, on_stage, on_answer_delta, retrieval_query, conversation_history)
     finally:
         close = getattr(retriever, "close", None)
         if callable(close):
@@ -360,6 +415,58 @@ def document_status_payload(document: DocumentRecord) -> DocumentStatusResponse:
     )
 
 
+def get_ready_document(document_id: str) -> DocumentRecord:
+    try:
+        document = DocumentRepository.from_store(MONGO_STORE).get(document_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if document is None:
+        raise HTTPException(status_code=404, detail=f"Document not found: {document_id}")
+    if document.status is not DocumentStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail=f"Document is not ready for queries: {document.status.value}")
+    return document
+
+
+def conversation_context(
+    request: QueryRequest,
+) -> tuple[list[dict[str, str]], str, ConversationRepository | None]:
+    if request.conversation_id is None:
+        return [], request.query, None
+    if request.document_id is None:
+        raise HTTPException(status_code=400, detail="A conversation query requires document_id.")
+
+    repository = ConversationRepository.from_store(MONGO_STORE)
+    conversation = repository.get(request.conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail=f"Conversation not found: {request.conversation_id}")
+    if conversation.document_id != request.document_id:
+        raise HTTPException(status_code=400, detail="Conversation does not belong to the requested document.")
+
+    history = recent_history(conversation.messages)
+    retrieval_query, _ = contextualize_retrieval_query(request.query, history)
+    return history, retrieval_query, repository
+
+
+def conversation_payload(conversation: ConversationRecord) -> dict[str, Any]:
+    return {
+        "conversation_id": conversation.conversation_id,
+        "title": conversation.title,
+        "document_id": conversation.document_id,
+        "created_at": conversation.created_at.isoformat(),
+        "updated_at": conversation.updated_at.isoformat(),
+        "messages": [
+            {
+                "message_id": message.message_id,
+                "role": message.role,
+                "content": message.content,
+                "timestamp": message.timestamp.isoformat(),
+                "metadata": message.metadata,
+            }
+            for message in conversation.messages
+        ],
+    }
+
+
 def safe_run_query(
     query: str,
     document_path: Path,
@@ -368,6 +475,8 @@ def safe_run_query(
     require_llm_answer: bool = False,
     on_stage: Callable[[str, object], None] | None = None,
     on_answer_delta: Callable[[str], None] | None = None,
+    retrieval_query: str | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
 ) -> WorkflowResult:
     try:
         return run_query(
@@ -378,6 +487,8 @@ def safe_run_query(
             require_llm_answer=require_llm_answer,
             on_stage=on_stage,
             on_answer_delta=on_answer_delta,
+            retrieval_query=retrieval_query,
+            conversation_history=conversation_history,
         )
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -390,6 +501,8 @@ def safe_run_document_query(
     require_llm_answer: bool = False,
     on_stage: Callable[[str, object], None] | None = None,
     on_answer_delta: Callable[[str], None] | None = None,
+    retrieval_query: str | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
 ) -> WorkflowResult:
     try:
         return run_document_query(
@@ -399,6 +512,8 @@ def safe_run_document_query(
             require_llm_answer=require_llm_answer,
             on_stage=on_stage,
             on_answer_delta=on_answer_delta,
+            retrieval_query=retrieval_query,
+            conversation_history=conversation_history,
         )
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -445,6 +560,8 @@ def workflow_trace_payload(result: WorkflowResult) -> dict[str, Any]:
         "selected_k": result.metrics.get("selected_k", len(result.sources)),
         "context_tokens": result.metrics.get("context_tokens", 0),
         "selection_reason": result.metrics.get("selection_reason", "fixed"),
+        "conversation_messages": result.metrics.get("conversation_messages", 0),
+        "retrieval_query_contextualized": result.metrics.get("retrieval_query_contextualized", False),
         "citation_status": result.metrics.get("citation_status", "no_evidence"),
         "citation_coverage": result.metrics.get("citation_coverage", 0.0),
         "cited_sources": result.metrics.get("cited_sources", 0),

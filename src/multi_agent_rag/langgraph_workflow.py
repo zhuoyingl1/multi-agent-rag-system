@@ -27,6 +27,8 @@ class LangGraphState(TypedDict, total=False):
     """State passed between LangGraph nodes."""
 
     query: str
+    retrieval_query: str
+    conversation_history: list[dict[str, str]]
     started: float
     plan: AgentPlan
     sources: list[SearchResult]
@@ -67,11 +69,20 @@ class LangGraphRAGWorkflow:
         query: str,
         on_stage: Callable[[str, object], None] | None = None,
         on_answer_delta: Callable[[str], None] | None = None,
+        retrieval_query: str | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> WorkflowResult:
         self._on_stage = on_stage
         self._on_answer_delta = on_answer_delta
         try:
-            final_state = self.graph.invoke({"query": query, "started": perf_counter()})
+            final_state = self.graph.invoke(
+                {
+                    "query": query,
+                    "retrieval_query": retrieval_query or query,
+                    "conversation_history": conversation_history or [],
+                    "started": perf_counter(),
+                }
+            )
             return final_state["result"]
         finally:
             self._on_stage = None
@@ -110,16 +121,16 @@ class LangGraphRAGWorkflow:
         return graph.compile()
 
     def _plan(self, state: LangGraphState) -> LangGraphState:
-        plan = self.planner.plan(state["query"])
+        plan = self.planner.plan(state["retrieval_query"])
         self._emit_stage("planning", plan)
         return {"plan": plan}
 
     def _retrieve(self, state: LangGraphState) -> LangGraphState:
-        sources = self.retriever.retrieve(state["query"], top_k=self.top_k)
+        sources = self.retriever.retrieve(state["retrieval_query"], top_k=self.top_k)
         self._emit_stage("retrieval", sources)
         return {
             "sources": sources,
-            "evidence_sufficient": has_enough_evidence(state["query"], sources),
+            "evidence_sufficient": has_enough_evidence(state["retrieval_query"], sources),
             "candidate_count": retriever_candidate_count(self.retriever, sources),
         }
 
@@ -131,7 +142,14 @@ class LangGraphRAGWorkflow:
         grounding = self.judge.judge([], [])
         self._emit_stage("agents", [])
         self._emit_stage("judge", grounding)
-        answer = self.summarizer.summarize(state["query"], [], grounding, [], self._on_answer_delta)
+        answer = self.summarizer.summarize(
+            state["query"],
+            [],
+            grounding,
+            [],
+            self._on_answer_delta,
+            state["conversation_history"],
+        )
         result = self._result(
             state=state,
             agents=[],
@@ -167,6 +185,7 @@ class LangGraphRAGWorkflow:
             state["grounding"],
             state["sources"],
             self._on_answer_delta,
+            state["conversation_history"],
         )
         result = self._result(
             state=state,
@@ -208,6 +227,8 @@ class LangGraphRAGWorkflow:
             "selected_k": selected_k,
             "context_tokens": context_tokens,
             "selection_reason": selection_reason,
+            "conversation_messages": len(state["conversation_history"]),
+            "retrieval_query_contextualized": state["retrieval_query"] != state["query"],
             "answer_type": self.summarizer.answer_type,
             "answer_model": self.summarizer.answer_model,
             "answer_error": self.summarizer.answer_error,

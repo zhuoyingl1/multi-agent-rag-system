@@ -71,20 +71,24 @@ class MultiAgentRAGWorkflow:
         query: str,
         on_stage: Callable[[str, object], None] | None = None,
         on_answer_delta: Callable[[str], None] | None = None,
+        retrieval_query: str | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> WorkflowResult:
         started = perf_counter()
-        plan = self.planner.plan(query)
+        search_query = retrieval_query or query
+        history = conversation_history or []
+        plan = self.planner.plan(search_query)
         _emit_stage(on_stage, "planning", plan)
-        sources = self.retriever.retrieve(query, top_k=self.top_k)
+        sources = self.retriever.retrieve(search_query, top_k=self.top_k)
         _emit_stage(on_stage, "retrieval", sources)
         candidate_count = retriever_candidate_count(self.retriever, sources)
         reranker = retriever_reranker_name(self.retriever)
         query_intent, query_variant_count = retriever_query_metrics(self.retriever)
         selected_k, context_tokens, selection_reason = retriever_selection_metrics(self.retriever, sources)
-        if not self._has_enough_evidence(query, sources):
+        if not self._has_enough_evidence(search_query, sources):
             grounding = self.judge.judge([], [])
             _emit_stage(on_stage, "judge", grounding)
-            answer = self.summarizer.summarize(query, [], grounding, [], on_answer_delta)
+            answer = self.summarizer.summarize(query, [], grounding, [], on_answer_delta, history)
             latency_ms = round((perf_counter() - started) * 1000, 2)
             metrics: dict[str, float | int | str] = {
                 "selected_agents": len(plan.selected_agents),
@@ -102,6 +106,8 @@ class MultiAgentRAGWorkflow:
                 "selected_k": selected_k,
                 "context_tokens": context_tokens,
                 "selection_reason": selection_reason,
+                "conversation_messages": len(history),
+                "retrieval_query_contextualized": search_query != query,
                 "answer_type": self.summarizer.answer_type,
                 "answer_model": self.summarizer.answer_model,
                 "answer_error": self.summarizer.answer_error,
@@ -127,7 +133,7 @@ class MultiAgentRAGWorkflow:
 
         grounding = self.judge.judge(agent_results, sources)
         _emit_stage(on_stage, "judge", grounding)
-        answer = self.summarizer.summarize(query, agent_results, grounding, sources, on_answer_delta)
+        answer = self.summarizer.summarize(query, agent_results, grounding, sources, on_answer_delta, history)
         latency_ms = round((perf_counter() - started) * 1000, 2)
         metrics: dict[str, float | int | str] = {
             "selected_agents": len(plan.selected_agents),
@@ -145,6 +151,8 @@ class MultiAgentRAGWorkflow:
             "selected_k": selected_k,
             "context_tokens": context_tokens,
             "selection_reason": selection_reason,
+            "conversation_messages": len(history),
+            "retrieval_query_contextualized": search_query != query,
             "answer_type": self.summarizer.answer_type,
             "answer_model": self.summarizer.answer_model,
             "answer_error": self.summarizer.answer_error,

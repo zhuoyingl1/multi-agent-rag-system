@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from multi_agent_rag.api.main import build_app, run_query
 from multi_agent_rag.ingestion import RegisteredDocument
-from multi_agent_rag.persistence import DocumentRecord, DocumentStatus
+from multi_agent_rag.persistence import ConversationMessage, ConversationRecord, DocumentRecord, DocumentStatus
 
 
 def fake_document(status: DocumentStatus = DocumentStatus.PROCESSING) -> DocumentRecord:
@@ -135,7 +135,16 @@ def test_query_endpoint_uses_persistent_document_id(monkeypatch) -> None:
     )
     captured: dict[str, str] = {}
 
-    def fake_document_query(query, document_id, orchestrator, require_llm_answer, _on_stage, _on_answer_delta):
+    def fake_document_query(
+        query,
+        document_id,
+        orchestrator,
+        require_llm_answer,
+        _on_stage,
+        _on_answer_delta,
+        _retrieval_query,
+        _conversation_history,
+    ):
         captured["query"] = query
         captured["document_id"] = document_id
         return expected
@@ -158,6 +167,114 @@ def test_query_endpoint_uses_persistent_document_id(monkeypatch) -> None:
         "document_id": "507f1f77bcf86cd799439011",
     }
     assert response.json()["metrics"]["retrieved_sources"] >= 1
+
+
+def test_create_conversation_scopes_it_to_document(monkeypatch) -> None:
+    now = datetime.now(UTC)
+    documents = MagicMock()
+    documents.get.return_value = fake_document(DocumentStatus.COMPLETED)
+    conversations = MagicMock()
+    conversations.create.return_value = ConversationRecord(
+        conversation_id="conversation-id",
+        title="Document review",
+        document_id="507f1f77bcf86cd799439011",
+        messages=[],
+        created_at=now,
+        updated_at=now,
+    )
+    monkeypatch.setattr("multi_agent_rag.api.main.DocumentRepository.from_store", lambda _store: documents)
+    monkeypatch.setattr("multi_agent_rag.api.main.ConversationRepository.from_store", lambda _store: conversations)
+    client = TestClient(build_app())
+
+    response = client.post(
+        "/conversations",
+        json={"document_id": "507f1f77bcf86cd799439011", "title": "Document review"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["conversation_id"] == "conversation-id"
+    assert response.json()["document_id"] == "507f1f77bcf86cd799439011"
+    conversations.create.assert_called_once_with(
+        title="Document review",
+        document_id="507f1f77bcf86cd799439011",
+    )
+
+
+def test_query_uses_and_persists_conversation_context(monkeypatch) -> None:
+    now = datetime.now(UTC)
+    expected = run_query(
+        "How does it help?",
+        Path("examples/sample_docs.md"),
+        orchestrator="local",
+        retrieval_backend="local",
+        require_llm_answer=False,
+    )
+    conversations = MagicMock()
+    conversations.get.return_value = ConversationRecord(
+        conversation_id="conversation-id",
+        title="RAG review",
+        document_id="507f1f77bcf86cd799439011",
+        messages=[
+            ConversationMessage("message-1", "user", "What is retrieval augmented generation?", now),
+            ConversationMessage("message-2", "assistant", "It grounds answers in evidence [S1].", now),
+        ],
+        created_at=now,
+        updated_at=now,
+    )
+    captured = {}
+
+    def fake_document_query(*args):
+        captured["retrieval_query"] = args[6]
+        captured["history"] = args[7]
+        return expected
+
+    monkeypatch.setattr("multi_agent_rag.api.main.ConversationRepository.from_store", lambda _store: conversations)
+    monkeypatch.setattr("multi_agent_rag.api.main.safe_run_document_query", fake_document_query)
+    client = TestClient(build_app())
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "How does it help?",
+            "document_id": "507f1f77bcf86cd799439011",
+            "conversation_id": "conversation-id",
+            "require_llm_answer": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "What is retrieval augmented generation?" in captured["retrieval_query"]
+    assert len(captured["history"]) == 2
+    conversations.add_turn.assert_called_once()
+    assert conversations.add_turn.call_args.kwargs["user_content"] == "How does it help?"
+    assert conversations.add_turn.call_args.kwargs["assistant_content"] == expected.answer
+
+
+def test_query_rejects_conversation_from_another_document(monkeypatch) -> None:
+    now = datetime.now(UTC)
+    conversations = MagicMock()
+    conversations.get.return_value = ConversationRecord(
+        conversation_id="conversation-id",
+        title="Other document",
+        document_id="other-document-id",
+        messages=[],
+        created_at=now,
+        updated_at=now,
+    )
+    monkeypatch.setattr("multi_agent_rag.api.main.ConversationRepository.from_store", lambda _store: conversations)
+    client = TestClient(build_app())
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "Tell me more.",
+            "document_id": "507f1f77bcf86cd799439011",
+            "conversation_id": "conversation-id",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Conversation does not belong to the requested document."
 
 
 def test_query_endpoint_rejects_invalid_orchestrator() -> None:

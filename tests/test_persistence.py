@@ -92,15 +92,35 @@ def test_conversation_repository_creates_and_adds_messages() -> None:
     collection.update_one.return_value = SimpleNamespace(matched_count=1)
     repository = ConversationRepository(collection)
 
-    conversation = repository.create("Document review")
+    conversation = repository.create("Document review", document_id="document-id")
     message = repository.add_message(conversation.conversation_id, role="user", content="Summarize the document.")
 
     assert conversation.title == "Document review"
     assert conversation.messages == []
+    assert conversation.document_id == "document-id"
     assert message.role == "user"
     assert message.content == "Summarize the document."
     update = collection.update_one.call_args.args[1]
     assert update["$push"]["messages"]["message_id"] == message.message_id
+
+
+def test_conversation_repository_adds_turn_atomically() -> None:
+    collection = MagicMock()
+    collection.update_one.return_value = SimpleNamespace(matched_count=1)
+    repository = ConversationRepository(collection)
+
+    user, assistant = repository.add_turn(
+        "conversation-id",
+        user_content="Tell me more.",
+        assistant_content="Here are more details.",
+        assistant_metadata={"answer_type": "llm"},
+    )
+
+    assert user.role == "user"
+    assert assistant.role == "assistant"
+    assert assistant.metadata == {"answer_type": "llm"}
+    update = collection.update_one.call_args.args[1]
+    assert [message["role"] for message in update["$push"]["messages"]["$each"]] == ["user", "assistant"]
 
 
 def test_conversation_repository_rejects_invalid_message() -> None:

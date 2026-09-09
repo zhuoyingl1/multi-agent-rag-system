@@ -130,6 +130,36 @@ def test_ollama_answer_composer_streams_chat_deltas(monkeypatch) -> None:
     assert captured_payload["payload"]["stream"] is True
 
 
+def test_ollama_answer_composer_places_history_before_current_evidence(monkeypatch) -> None:
+    document = Document(title="contract.md", text="The initial payment is due when the agreement is signed.")
+    retriever = HybridRetriever()
+    retriever.index(chunk_document(document))
+    sources = retriever.retrieve("What are the payment terms?", top_k=3)
+    composer = OllamaAnswerComposer(model="qwen2.5:3b")
+    captured_payload = {}
+
+    def fake_post(_path, payload):
+        captured_payload.update(payload)
+        return {"message": {"content": "The initial payment is due at signing [S1]."}}
+
+    monkeypatch.setattr(composer, "_post_json", fake_post)
+    composer.compose(
+        "Tell me more about that.",
+        [],
+        sources,
+        [
+            {"role": "user", "content": "What are the payment terms?"},
+            {"role": "assistant", "content": "The initial payment is due at signing [S1]."},
+        ],
+    )
+
+    messages = captured_payload["messages"]
+    assert [message["role"] for message in messages] == ["system", "user", "assistant", "user"]
+    assert messages[1]["content"] == "What are the payment terms?"
+    assert "Tell me more about that." in messages[-1]["content"]
+    assert "do not reuse citation ids" in messages[0]["content"]
+
+
 def test_create_answer_composer_supports_ollama(monkeypatch) -> None:
     monkeypatch.setenv("LLM_ANSWER_PROVIDER", "ollama")
     monkeypatch.setenv("LLM_ANSWER_MODEL", "qwen2.5:3b")

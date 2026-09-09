@@ -69,3 +69,4 @@ class ConversationRecord:
     created_at: datetime
     updated_at: datetime
     assistant_id: str | None = None
+    document_id: str | None = None
