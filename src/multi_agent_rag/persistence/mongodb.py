@@ -16,7 +16,14 @@ from pymongo.collection import Collection
 from pymongo.database import Database
 
 from multi_agent_rag.models import Chunk
-from multi_agent_rag.persistence.models import ChunkRecord, ConversationMessage, ConversationRecord, DocumentRecord, DocumentStatus
+from multi_agent_rag.persistence.models import (
+    ChunkRecord,
+    ConversationMessage,
+    ConversationRecord,
+    DocumentRecord,
+    DocumentStatus,
+    KnowledgeSpaceRecord,
+)
 
 
 def utc_now() -> datetime:
@@ -70,6 +77,43 @@ class MongoStore:
         self._database = None
 
 
+class KnowledgeSpaceRepository:
+    """Persist named document collections used for scoped retrieval."""
+
+    def __init__(self, collection: Collection[dict[str, Any]]) -> None:
+        self.collection = collection
+
+    @classmethod
+    def from_store(cls, store: MongoStore) -> "KnowledgeSpaceRepository":
+        return cls(store.collection("knowledge_spaces"))
+
+    def create(self, name: str, description: str = "") -> KnowledgeSpaceRecord:
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise ValueError("Knowledge space name must not be empty.")
+        now = utc_now()
+        payload: dict[str, Any] = {
+            "name": normalized_name,
+            "description": description.strip(),
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = self.collection.insert_one(payload)
+        payload["_id"] = result.inserted_id
+        return _knowledge_space_record(payload)
+
+    def get(self, knowledge_space_id: str) -> KnowledgeSpaceRecord | None:
+        space = self.collection.find_one(_object_id_filter(knowledge_space_id, "knowledge space"))
+        return _knowledge_space_record(space) if space else None
+
+    def list(self, *, skip: int = 0, limit: int = 100) -> list[KnowledgeSpaceRecord]:
+        cursor = self.collection.find({}).sort("updated_at", -1).skip(skip).limit(limit)
+        return [_knowledge_space_record(space) for space in cursor]
+
+    def count(self) -> int:
+        return int(self.collection.count_documents({}))
+
+
 class DocumentRepository:
     """Persist document metadata and ingestion progress."""
 
@@ -89,6 +133,7 @@ class DocumentRepository:
         file_size: int,
         file_hash: str,
         metadata: dict[str, Any] | None = None,
+        knowledge_space_id: str | None = None,
     ) -> DocumentRecord:
         now = utc_now()
         payload: dict[str, Any] = {
@@ -98,6 +143,7 @@ class DocumentRepository:
             "file_size": file_size,
             "file_hash": file_hash,
             "metadata": metadata or {},
+            "knowledge_space_id": knowledge_space_id,
             "status": DocumentStatus.PROCESSING.value,
             "progress_percentage": 0,
             "current_stage": "upload",
@@ -118,18 +164,40 @@ class DocumentRepository:
         document = self.collection.find_one(_document_filter(document_id))
         return _document_record(document) if document else None
 
-    def find_duplicate(self, file_hash: str) -> DocumentRecord | None:
-        document = self.collection.find_one({"file_hash": file_hash})
+    def find_duplicate(self, file_hash: str, knowledge_space_id: str | None = None) -> DocumentRecord | None:
+        document = self.collection.find_one({"file_hash": file_hash, "knowledge_space_id": knowledge_space_id})
         return _document_record(document) if document else None
 
-    def list(self, *, skip: int = 0, limit: int = 50, status: DocumentStatus | None = None) -> list[DocumentRecord]:
-        document_filter = {"status": status.value} if status is not None else {}
+    def list(
+        self,
+        *,
+        skip: int = 0,
+        limit: int = 50,
+        status: DocumentStatus | None = None,
+        knowledge_space_id: str | None = None,
+    ) -> list[DocumentRecord]:
+        document_filter: dict[str, Any] = {}
+        if status is not None:
+            document_filter["status"] = status.value
+        if knowledge_space_id is not None:
+            document_filter["knowledge_space_id"] = knowledge_space_id
         cursor = self.collection.find(document_filter).sort("created_at", -1).skip(skip).limit(limit)
         return [_document_record(document) for document in cursor]
 
-    def count(self, status: DocumentStatus | None = None) -> int:
-        document_filter = {"status": status.value} if status is not None else {}
+    def count(self, status: DocumentStatus | None = None, knowledge_space_id: str | None = None) -> int:
+        document_filter: dict[str, Any] = {}
+        if status is not None:
+            document_filter["status"] = status.value
+        if knowledge_space_id is not None:
+            document_filter["knowledge_space_id"] = knowledge_space_id
         return int(self.collection.count_documents(document_filter))
+
+    def set_knowledge_space(self, document_id: str, knowledge_space_id: str | None) -> bool:
+        result = self.collection.update_one(
+            _document_filter(document_id),
+            {"$set": {"knowledge_space_id": knowledge_space_id, "updated_at": utc_now()}},
+        )
+        return result.matched_count > 0
 
     def delete(self, document_id: str) -> bool:
         result = self.collection.delete_one(_document_filter(document_id))
@@ -246,6 +314,12 @@ class ChunkRepository:
         cursor = self.collection.find({"document_id": document_id}).sort("index", 1)
         return [_chunk_record(chunk) for chunk in cursor]
 
+    def list_for_documents(self, document_ids: list[str]) -> list[ChunkRecord]:
+        if not document_ids:
+            return []
+        cursor = self.collection.find({"document_id": {"$in": document_ids}}).sort([("document_id", 1), ("index", 1)])
+        return [_chunk_record(chunk) for chunk in cursor]
+
     def list_page(
         self,
         document_id: str,
@@ -282,6 +356,7 @@ class ConversationRepository:
         title: str = "New conversation",
         assistant_id: str | None = None,
         document_id: str | None = None,
+        knowledge_space_id: str | None = None,
     ) -> ConversationRecord:
         now = utc_now()
         payload: dict[str, Any] = {
@@ -289,6 +364,7 @@ class ConversationRepository:
             "title": title.strip() or "New conversation",
             "assistant_id": assistant_id,
             "document_id": document_id,
+            "knowledge_space_id": knowledge_space_id,
             "messages": [],
             "created_at": now,
             "updated_at": now,
@@ -372,11 +448,25 @@ class ConversationRepository:
         return int(self.collection.delete_many({"document_id": document_id}).deleted_count)
 
 
-def _document_filter(document_id: str) -> dict[str, ObjectId]:
+def _object_id_filter(value: str, label: str) -> dict[str, ObjectId]:
     try:
-        return {"_id": ObjectId(document_id)}
+        return {"_id": ObjectId(value)}
     except InvalidId as exc:
-        raise ValueError(f"Invalid document ID: {document_id}") from exc
+        raise ValueError(f"Invalid {label} ID: {value}") from exc
+
+
+def _document_filter(document_id: str) -> dict[str, ObjectId]:
+    return _object_id_filter(document_id, "document")
+
+
+def _knowledge_space_record(space: dict[str, Any]) -> KnowledgeSpaceRecord:
+    return KnowledgeSpaceRecord(
+        knowledge_space_id=str(space["_id"]),
+        name=str(space["name"]),
+        description=str(space.get("description") or ""),
+        created_at=space["created_at"],
+        updated_at=space["updated_at"],
+    )
 
 
 def _document_record(document: dict[str, Any]) -> DocumentRecord:
@@ -399,6 +489,7 @@ def _document_record(document: dict[str, Any]) -> DocumentRecord:
         embedding_model=document.get("embedding_model"),
         indexed_at=document.get("indexed_at"),
         chunk_count=int(document.get("chunk_count", 0)),
+        knowledge_space_id=document.get("knowledge_space_id"),
     )
 
 
@@ -430,6 +521,7 @@ def _conversation_record(conversation: dict[str, Any]) -> ConversationRecord:
         title=str(conversation.get("title") or "New conversation"),
         assistant_id=conversation.get("assistant_id"),
         document_id=conversation.get("document_id"),
+        knowledge_space_id=conversation.get("knowledge_space_id"),
         messages=[_conversation_message(message) for message in conversation.get("messages", [])],
         created_at=conversation["created_at"],
         updated_at=conversation["updated_at"],

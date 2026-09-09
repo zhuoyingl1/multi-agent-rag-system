@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -67,13 +68,22 @@ class Neo4jGraphAdapter:
         return [str(record["entity"]) for record in records]
 
     def retrieve_chunk_matches(self, query: str, document_id: str, limit: int = 50) -> list[GraphChunkMatch]:
-        """Find chunks connected to query entities inside one document graph."""
+        return self.retrieve_chunk_matches_for_documents(query, [document_id], limit)
+
+    def retrieve_chunk_matches_for_documents(
+        self,
+        query: str,
+        document_ids: Sequence[str],
+        limit: int = 50,
+    ) -> list[GraphChunkMatch]:
+        """Find chunks connected to query entities inside a document scope."""
 
         entities = sorted(extract_entities(query) | {term for term in tokenize(query) if len(term) > 2})
-        if not entities:
+        unique_ids = list(dict.fromkeys(document_ids))
+        if not entities or not unique_ids:
             return []
         with self._get_driver().session(database=self.database) as session:
-            records = session.execute_read(self._related_chunks, entities, document_id, limit)
+            records = session.execute_read(self._related_chunks, entities, unique_ids, limit)
         return [
             GraphChunkMatch(
                 chunk_id=str(record["chunk_id"]),
@@ -211,13 +221,15 @@ class Neo4jGraphAdapter:
         return list(result)
 
     @staticmethod
-    def _related_chunks(tx: Any, entities: list[str], document_id: str, limit: int) -> list[Any]:
+    def _related_chunks(tx: Any, entities: list[str], document_ids: list[str], limit: int) -> list[Any]:
         result = tx.run(
             """
             UNWIND $entities AS query_entity
-            MATCH (document:RagDocument {id: $document_id})-[:HAS_CHUNK]->(seed:RagChunk)
+            MATCH (document:RagDocument)-[:HAS_CHUNK]->(seed:RagChunk)
+            WHERE document.id IN $document_ids
             MATCH (seed)-[:MENTIONS]->(:RagEntity {name: query_entity})
-            OPTIONAL MATCH (seed)-[:MENTIONS]->(shared:RagEntity)<-[:MENTIONS]-(related:RagChunk)<-[:HAS_CHUNK]-(document)
+            OPTIONAL MATCH (seed)-[:MENTIONS]->(shared:RagEntity)<-[:MENTIONS]-(related:RagChunk)<-[:HAS_CHUNK]-(related_document:RagDocument)
+            WHERE related_document.id IN $document_ids
             WITH seed, query_entity, collect(DISTINCT related) AS related_chunks
             UNWIND [seed] + related_chunks AS candidate
             WITH candidate, collect(DISTINCT query_entity) AS matched_entities
@@ -229,36 +241,47 @@ class Neo4jGraphAdapter:
             LIMIT $limit
             """,
             entities=entities,
-            document_id=document_id,
+            document_ids=document_ids,
             limit=limit,
         )
         return list(result)
 
 
 class Neo4jGraphRetriever:
-    """Retrieve persisted chunks through document-scoped graph relationships."""
+    """Retrieve persisted chunks through scoped graph relationships."""
 
     def __init__(
         self,
         adapter: Neo4jGraphAdapter,
         chunks: ChunkRepository,
-        document_id: str,
+        document_id: str | Sequence[str],
         top_k: int = 50,
     ) -> None:
         self.adapter = adapter
         self.chunks = chunks
-        self.document_id = document_id
+        self.document_ids = [document_id] if isinstance(document_id, str) else list(document_id)
         self.top_k = top_k
 
     def index(self, chunks: list[Chunk]) -> None:
         raise RuntimeError("Persistent document chunks must be indexed during ingestion.")
 
     def retrieve(self, query: str, top_k: int | None = None) -> list[SearchResult]:
-        matches = self.adapter.retrieve_chunk_matches(query, self.document_id, top_k or self.top_k)
+        matches = (
+            self.adapter.retrieve_chunk_matches(query, self.document_ids[0], top_k or self.top_k)
+            if len(self.document_ids) == 1
+            else self.adapter.retrieve_chunk_matches_for_documents(query, self.document_ids, top_k or self.top_k)
+        )
         if not matches:
             return []
 
-        records = {record.chunk_id: record for record in self.chunks.list_for_document(self.document_id)}
+        records = {
+            record.chunk_id: record
+            for record in (
+                self.chunks.list_for_document(self.document_ids[0])
+                if len(self.document_ids) == 1
+                else self.chunks.list_for_documents(self.document_ids)
+            )
+        }
         results: list[SearchResult] = []
         for match in matches:
             record = records.get(match.chunk_id)

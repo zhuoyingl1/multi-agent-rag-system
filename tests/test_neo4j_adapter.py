@@ -126,6 +126,22 @@ def test_neo4j_adapter_retrieves_document_scoped_chunk_matches() -> None:
     assert matches[0].score == 2.0
     assert matches[0].entities == ["neo4j", "rag"]
     assert {"neo4j", "rag"}.issubset(driver.tx.last_params["entities"])
+    assert driver.tx.last_params["document_ids"] == ["doc-1"]
+
+
+def test_neo4j_adapter_retrieves_across_document_scope() -> None:
+    driver = FakeDriver()
+    adapter = Neo4jGraphAdapter(
+        uri="bolt://localhost:7687",
+        user="neo4j",
+        password="password123",
+        driver=driver,
+    )
+
+    matches = adapter.retrieve_chunk_matches_for_documents("how does neo4j support rag?", ["doc-1", "doc-2"])
+
+    assert matches[0].chunk_id == "chunk-1"
+    assert driver.tx.last_params["document_ids"] == ["doc-1", "doc-2"]
 
 
 def test_graph_retriever_returns_persisted_chunk_content() -> None:

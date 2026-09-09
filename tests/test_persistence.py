@@ -7,7 +7,14 @@ from unittest.mock import MagicMock
 from bson import ObjectId
 
 from multi_agent_rag.models import Chunk, ChunkType
-from multi_agent_rag.persistence import ChunkRepository, ConversationRepository, DocumentRepository, DocumentStatus, MongoSettings
+from multi_agent_rag.persistence import (
+    ChunkRepository,
+    ConversationRepository,
+    DocumentRepository,
+    DocumentStatus,
+    KnowledgeSpaceRepository,
+    MongoSettings,
+)
 
 
 class FakeCursor:
@@ -60,6 +67,24 @@ def test_document_repository_creates_processing_record() -> None:
     assert record.progress_percentage == 0
     payload = collection.insert_one.call_args.args[0]
     assert payload["current_stage"] == "upload"
+
+
+def test_knowledge_space_repository_creates_and_lists_spaces() -> None:
+    collection = MagicMock()
+    knowledge_space_id = ObjectId()
+    collection.insert_one.return_value = SimpleNamespace(inserted_id=knowledge_space_id)
+    repository = KnowledgeSpaceRepository(collection)
+
+    created = repository.create("Research", "Related technical documents")
+    collection.find.return_value = FakeCursor([collection.insert_one.call_args.args[0]])
+    collection.count_documents.return_value = 1
+
+    spaces = repository.list(limit=10)
+
+    assert created.knowledge_space_id == str(knowledge_space_id)
+    assert created.name == "Research"
+    assert spaces[0].description == "Related technical documents"
+    assert repository.count() == 1
 
 
 def test_document_repository_updates_progress_and_completion() -> None:
@@ -164,6 +189,26 @@ def test_document_repository_lists_counts_and_deletes_records() -> None:
     assert repository.delete(str(document_id)) is True
     collection.find.assert_called_once_with({"status": "completed"})
     collection.count_documents.assert_called_once_with({"status": "completed"})
+
+
+def test_document_repository_filters_and_assigns_knowledge_space() -> None:
+    collection = MagicMock()
+    collection.find.return_value = FakeCursor([])
+    collection.count_documents.return_value = 0
+    collection.update_one.return_value = SimpleNamespace(matched_count=1)
+    repository = DocumentRepository(collection)
+    document_id = str(ObjectId())
+
+    records = repository.list(limit=10, knowledge_space_id="space-id")
+    count = repository.count(knowledge_space_id="space-id")
+    assigned = repository.set_knowledge_space(document_id, "space-id")
+
+    assert records == []
+    assert count == 0
+    assert assigned is True
+    collection.find.assert_called_once_with({"knowledge_space_id": "space-id"})
+    collection.count_documents.assert_called_once_with({"knowledge_space_id": "space-id"})
+    assert collection.update_one.call_args.args[1]["$set"]["knowledge_space_id"] == "space-id"
 
 
 def test_conversation_repository_creates_and_adds_messages() -> None:
@@ -281,3 +326,13 @@ def test_chunk_repository_lists_filtered_preview_page() -> None:
     }
     collection.find.assert_called_once_with(expected_filter)
     collection.count_documents.assert_called_once_with(expected_filter)
+
+
+def test_chunk_repository_lists_multiple_documents() -> None:
+    collection = MagicMock()
+    collection.find.return_value = FakeCursor([])
+
+    records = ChunkRepository(collection).list_for_documents(["doc-1", "doc-2"])
+
+    assert records == []
+    collection.find.assert_called_once_with({"document_id": {"$in": ["doc-1", "doc-2"]}})

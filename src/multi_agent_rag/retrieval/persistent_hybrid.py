@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import math
@@ -15,11 +16,11 @@ from multi_agent_rag.retrieval.tokenization import tokenize
 
 
 class MongoKeywordRetriever:
-    """Rank one document's persisted chunks with BM25."""
+    """Rank persisted chunks from one or more documents with BM25."""
 
-    def __init__(self, chunks: ChunkRepository, document_id: str, top_k: int = 50) -> None:
+    def __init__(self, chunks: ChunkRepository, document_id: str | Sequence[str], top_k: int = 50) -> None:
         self.chunks = chunks
-        self.document_id = document_id
+        self.document_ids = [document_id] if isinstance(document_id, str) else list(document_id)
         self.top_k = top_k
 
     def index(self, chunks: list[Chunk]) -> None:
@@ -27,7 +28,11 @@ class MongoKeywordRetriever:
 
     def retrieve(self, query: str, top_k: int | None = None) -> list[SearchResult]:
         query_terms = tokenize(query)
-        records = self.chunks.list_for_document(self.document_id)
+        records = (
+            self.chunks.list_for_document(self.document_ids[0])
+            if len(self.document_ids) == 1
+            else self.chunks.list_for_documents(self.document_ids)
+        )
         if not query_terms or not records:
             return []
 

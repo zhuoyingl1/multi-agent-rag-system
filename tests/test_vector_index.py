@@ -48,9 +48,11 @@ class FakeQdrantClient:
         score_threshold: float,
         with_payload: bool,
     ) -> SimpleNamespace:
-        document_id = query_filter.must[0].match.value
+        match = query_filter.must[0].match
+        match_any = getattr(match, "any", None)
+        document_ids = list(match_any) if match_any else [match.value]
         points = [point for batch in self.upsert_batches for point in batch]
-        matches = [point for point in points if point["payload"]["document_id"] == document_id]
+        matches = [point for point in points if point["payload"]["document_id"] in document_ids]
         scored = [SimpleNamespace(payload=point["payload"], score=0.9) for point in matches[:limit]]
         return SimpleNamespace(points=scored)
 
@@ -108,6 +110,22 @@ def test_document_index_searches_only_the_requested_document() -> None:
     assert results[0].chunk.document_id == "doc-1"
     assert results[0].retrieval_type is RetrievalType.VECTOR
     assert results[0].highlights == ["rag", "evidence"]
+
+
+def test_document_index_searches_multiple_requested_documents() -> None:
+    embedder = FakeEmbedder()
+    client = FakeQdrantClient()
+    index = QdrantDocumentIndex("http://localhost:6333", "document_chunks", embedder, client=client)
+    first = chunk_document(Document(title="first.md", text="Qdrant vector evidence", document_id="doc-1"))
+    second = chunk_document(Document(title="second.md", text="Neo4j graph evidence", document_id="doc-2"))
+    third = chunk_document(Document(title="third.md", text="Excluded document", document_id="doc-3"))
+    index.replace_document_chunks("doc-1", first)
+    index.replace_document_chunks("doc-2", second)
+    index.replace_document_chunks("doc-3", third)
+
+    results = index.search_documents(["doc-1", "doc-2"], "evidence", limit=5)
+
+    assert {result.chunk.document_id for result in results} == {"doc-1", "doc-2"}
 
 
 def test_document_index_deletes_only_requested_document() -> None:

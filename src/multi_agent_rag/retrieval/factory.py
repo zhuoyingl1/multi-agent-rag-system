@@ -40,6 +40,16 @@ def create_retriever(backend: str | None = None, top_k: int = 5) -> Retriever:
 def create_document_retriever(document_id: str, top_k: int = 5) -> Retriever:
     """Create a retriever bound to one persistently indexed document."""
 
+    return create_document_scope_retriever([document_id], top_k)
+
+
+def create_document_scope_retriever(document_ids: list[str], top_k: int = 5) -> Retriever:
+    """Create a retriever bound to a persistent multi-document scope."""
+
+    unique_ids = list(dict.fromkeys(document_ids))
+    if not unique_ids:
+        raise ValueError("A document retrieval scope must not be empty.")
+
     embedder = OllamaEmbeddingService(
         base_url=os.getenv("OLLAMA_BASE_URL") or "http://127.0.0.1:11434",
         model_name=os.getenv("OLLAMA_EMBEDDING_MODEL") or "nomic-embed-text",
@@ -51,17 +61,17 @@ def create_document_retriever(document_id: str, top_k: int = 5) -> Retriever:
         embedder=embedder,
         score_threshold=float(os.getenv("QDRANT_SCORE_THRESHOLD") or "0.5"),
     )
-    vector = QdrantDocumentRetriever(index, document_id, top_k=top_k)
+    vector = QdrantDocumentRetriever(index, unique_ids, top_k=top_k)
     store = MongoStore()
     chunks = ChunkRepository.from_store(store)
-    keyword = MongoKeywordRetriever(chunks, document_id)
+    keyword = MongoKeywordRetriever(chunks, unique_ids)
     graph_adapter = Neo4jGraphAdapter(
         uri=os.getenv("NEO4J_URI") or "bolt://localhost:7687",
         user=os.getenv("NEO4J_USER") or "neo4j",
         password=os.getenv("NEO4J_PASSWORD") or "password123",
         database=os.getenv("NEO4J_DATABASE") or "neo4j",
     )
-    graph = Neo4jGraphRetriever(graph_adapter, chunks, document_id)
+    graph = Neo4jGraphRetriever(graph_adapter, chunks, unique_ids)
     query_planner = RetrievalQueryPlanner(
         rewrite_enabled=(os.getenv("QUERY_REWRITE_ENABLED") or "true").lower() in {"1", "true", "yes", "on"},
         max_variants=int(os.getenv("QUERY_REWRITE_MAX_VARIANTS") or "3"),

@@ -31,6 +31,21 @@ def test_mongo_keyword_retriever_ranks_exact_terms_with_bm25() -> None:
     repository.list_for_document.assert_called_once_with("doc-1")
 
 
+def test_mongo_keyword_retriever_ranks_chunks_across_documents() -> None:
+    repository = MagicMock()
+    now = datetime.now(UTC)
+    repository.list_for_documents.return_value = [
+        ChunkRecord("chunk-1", "doc-1", "Qdrant stores vectors.", "prose", 1, {}, now),
+        ChunkRecord("chunk-2", "doc-2", "Neo4j stores graph relationships.", "prose", 1, {}, now),
+    ]
+    retriever = MongoKeywordRetriever(repository, ["doc-1", "doc-2"])
+
+    results = retriever.retrieve("graph relationships")
+
+    assert [item.chunk.document_id for item in results] == ["doc-2"]
+    repository.list_for_documents.assert_called_once_with(["doc-1", "doc-2"])
+
+
 def test_reciprocal_rank_fusion_boosts_multi_signal_chunk() -> None:
     vector = [
         result("chunk-1", "Vector only", 0.8, RetrievalType.VECTOR),

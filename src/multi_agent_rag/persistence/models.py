@@ -17,6 +17,17 @@ class DocumentStatus(str, Enum):
 
 
 @dataclass(frozen=True)
+class KnowledgeSpaceRecord:
+    """A named collection of documents used as one retrieval scope."""
+
+    knowledge_space_id: str
+    name: str
+    description: str
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
 class DocumentRecord:
     """Document metadata stored before and during ingestion."""
 
@@ -38,6 +49,7 @@ class DocumentRecord:
     embedding_model: str | None = None
     indexed_at: datetime | None = None
     chunk_count: int = 0
+    knowledge_space_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -75,3 +87,4 @@ class ConversationRecord:
     updated_at: datetime
     assistant_id: str | None = None
     document_id: str | None = None
+    knowledge_space_id: str | None = None

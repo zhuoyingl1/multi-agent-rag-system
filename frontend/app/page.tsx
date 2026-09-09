@@ -9,10 +9,12 @@ import {
   Database,
   FileSearch,
   FileText,
+  FolderTree,
   Loader2,
   MessageSquarePlus,
   Network,
   Play,
+  Plus,
   Radio,
   RefreshCw,
   Search,
@@ -51,6 +53,7 @@ type UploadResponse = {
   size_bytes: number;
   status: string;
   duplicate: boolean;
+  knowledge_space_id: string | null;
 };
 
 type DocumentStatusResponse = {
@@ -70,6 +73,7 @@ type DocumentStatusResponse = {
   indexed_at: string | null;
   chunk_count: number;
   index_stale: boolean;
+  knowledge_space_id: string | null;
 };
 
 type DocumentListResponse = {
@@ -98,10 +102,25 @@ type DocumentChunkListResponse = {
   limit: number;
 };
 
+type KnowledgeSpace = {
+  knowledge_space_id: string;
+  name: string;
+  description: string;
+  document_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+type KnowledgeSpaceListResponse = {
+  knowledge_spaces: KnowledgeSpace[];
+  total: number;
+};
+
 type ConversationResponse = {
   conversation_id: string;
   title: string;
   document_id: string;
+  knowledge_space_id: string | null;
 };
 
 type HealthMetrics = {
@@ -178,6 +197,10 @@ export default function Home() {
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [documentStatus, setDocumentStatus] = useState<DocumentStatusResponse | null>(null);
   const [documents, setDocuments] = useState<DocumentStatusResponse[]>([]);
+  const [knowledgeSpaces, setKnowledgeSpaces] = useState<KnowledgeSpace[]>([]);
+  const [knowledgeSpaceId, setKnowledgeSpaceId] = useState("");
+  const [newSpaceName, setNewSpaceName] = useState("");
+  const [creatingSpace, setCreatingSpace] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [chunkPreview, setChunkPreview] = useState<DocumentChunkListResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -192,14 +215,23 @@ export default function Home() {
   const answerMode = formatAnswerMode(result?.metrics);
   const answerWarning = formatAnswerWarning(result?.metrics);
   const uploadDisabled = !hydrated || uploading || !selectedFile;
+  const scopedDocuments = useMemo(
+    () =>
+      knowledgeSpaceId
+        ? documents.filter((document) => document.knowledge_space_id === knowledgeSpaceId)
+        : documents,
+    [documents, knowledgeSpaceId],
+  );
+  const scopeReady = knowledgeSpaceId
+    ? scopedDocuments.some((document) => document.status === "completed" && !document.index_stale)
+    : Boolean(documentId && documentStatus?.status === "completed" && !documentStatus.index_stale);
   const runDisabled =
     !hydrated ||
     loading ||
     reindexing ||
     deleting ||
     !query.trim() ||
-    !documentId ||
-    Boolean(documentStatus && (documentStatus.status !== "completed" || documentStatus.index_stale));
+    !scopeReady;
   const evaluationDisabled = !hydrated || evaluating;
   const groundingScore = useMemo(() => {
     const value = result?.metrics.grounding_score;
@@ -212,7 +244,20 @@ export default function Home() {
   }, []);
 
   async function refreshDashboard() {
-    await Promise.all([refreshMetrics(), refreshIntegrations(), refreshDocuments()]);
+    await Promise.all([refreshMetrics(), refreshIntegrations(), refreshDocuments(), refreshKnowledgeSpaces()]);
+  }
+
+  async function refreshKnowledgeSpaces() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/knowledge-spaces?limit=100`);
+      if (!response.ok) {
+        throw new Error(`Knowledge space list request failed with ${response.status}`);
+      }
+      const catalog = (await response.json()) as KnowledgeSpaceListResponse;
+      setKnowledgeSpaces(catalog.knowledge_spaces);
+    } catch {
+      setKnowledgeSpaces([]);
+    }
   }
 
   async function refreshDocuments() {
@@ -313,6 +358,44 @@ export default function Home() {
     setError(null);
   }
 
+  async function createKnowledgeSpace() {
+    const name = newSpaceName.trim();
+    if (!name) {
+      return;
+    }
+    setCreatingSpace(true);
+    setError(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/knowledge-spaces`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, `Knowledge space request failed with ${response.status}`));
+      }
+      const created = (await response.json()) as KnowledgeSpace;
+      setKnowledgeSpaces((current) => [created, ...current]);
+      setKnowledgeSpaceId(created.knowledge_space_id);
+      setNewSpaceName("");
+      selectDocument("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Knowledge space creation failed");
+    } finally {
+      setCreatingSpace(false);
+    }
+  }
+
+  function selectKnowledgeSpace(selectedSpaceId: string) {
+    setKnowledgeSpaceId(selectedSpaceId);
+    selectDocument("");
+    setConversationId("");
+    setResult(null);
+    setStreamedAnswer("");
+    setEvents([]);
+    setError(null);
+  }
+
   async function uploadDocument() {
     if (!selectedFile) {
       return;
@@ -329,6 +412,9 @@ export default function Home() {
     try {
       const body = new FormData();
       body.append("file", selectedFile);
+      if (knowledgeSpaceId) {
+        body.append("knowledge_space_id", knowledgeSpaceId);
+      }
       const response = await fetch(`${apiBaseUrl}/documents/upload`, {
         method: "POST",
         body,
@@ -346,7 +432,7 @@ export default function Home() {
           ? `Index update required: ${uploaded.filename}`
           : `Ready: ${uploaded.filename} (${status.chunk_count} chunks)`,
       );
-      await refreshDocuments();
+      await Promise.all([refreshDocuments(), refreshKnowledgeSpaces()]);
       await loadChunkPreview(uploaded.document_id);
     } catch (caught) {
       setUploadStatus(null);
@@ -393,7 +479,7 @@ export default function Home() {
       setUploadStatus(`Reindexing ${documentName}`);
       const status = await waitForDocument(documentId, documentName);
       setUploadStatus(`Ready: ${documentName} (${status.chunk_count} chunks)`);
-      await refreshDocuments();
+      await Promise.all([refreshDocuments(), refreshKnowledgeSpaces()]);
       await loadChunkPreview(documentId);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Reindex failed");
@@ -451,7 +537,7 @@ export default function Home() {
       setChunkPreview(null);
       setPreviewQuery("");
       setPreviewType("");
-      await refreshDocuments();
+      await Promise.all([refreshDocuments(), refreshKnowledgeSpaces()]);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Delete failed");
     } finally {
@@ -500,7 +586,14 @@ export default function Home() {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ document_id: documentId, title: documentName || undefined }),
+      body: JSON.stringify(
+        knowledgeSpaceId
+          ? {
+              knowledge_space_id: knowledgeSpaceId,
+              title: knowledgeSpaces.find((space) => space.knowledge_space_id === knowledgeSpaceId)?.name,
+            }
+          : { document_id: documentId, title: documentName || undefined },
+      ),
     });
     if (!response.ok) {
       throw new Error(await readErrorMessage(response, `Conversation request failed with ${response.status}`));
@@ -518,7 +611,7 @@ export default function Home() {
       },
       body: JSON.stringify({
         query,
-        document_id: documentId,
+        ...(knowledgeSpaceId ? { knowledge_space_id: knowledgeSpaceId } : { document_id: documentId }),
         conversation_id: activeConversationId,
         require_llm_answer: true,
       }),
@@ -537,7 +630,7 @@ export default function Home() {
       },
       body: JSON.stringify({
         query,
-        document_id: documentId,
+        ...(knowledgeSpaceId ? { knowledge_space_id: knowledgeSpaceId } : { document_id: documentId }),
         conversation_id: activeConversationId,
         require_llm_answer: true,
       }),
@@ -632,11 +725,47 @@ export default function Home() {
             <h2>Document Query</h2>
           </div>
 
-          <label htmlFor="indexedDocument">Indexed document</label>
+          <label htmlFor="knowledgeSpace">Knowledge space</label>
+          <div className="spaceSelectRow">
+            <select
+              id="knowledgeSpace"
+              value={knowledgeSpaceId}
+              onChange={(event) => selectKnowledgeSpace(event.target.value)}
+            >
+              <option value="">Single document</option>
+              {knowledgeSpaces.map((space) => (
+                <option key={space.knowledge_space_id} value={space.knowledge_space_id}>
+                  {space.name} ({space.document_count})
+                </option>
+              ))}
+            </select>
+            <FolderTree size={18} aria-hidden="true" />
+          </div>
+          <div className="spaceCreateRow">
+            <input
+              value={newSpaceName}
+              onChange={(event) => setNewSpaceName(event.target.value)}
+              placeholder="New knowledge space"
+              maxLength={120}
+              aria-label="New knowledge space name"
+            />
+            <button
+              className="smallIconButton"
+              type="button"
+              onClick={createKnowledgeSpace}
+              disabled={!hydrated || creatingSpace || !newSpaceName.trim()}
+              aria-label="Create knowledge space"
+              title="Create knowledge space"
+            >
+              {creatingSpace ? <Loader2 className="spin" size={17} /> : <Plus size={17} />}
+            </button>
+          </div>
+
+          <label htmlFor="indexedDocument">{knowledgeSpaceId ? "Document to inspect" : "Indexed document"}</label>
           <div className="indexedDocumentRow">
             <select id="indexedDocument" value={documentId} onChange={(event) => selectDocument(event.target.value)}>
-              <option value="">Select a document</option>
-              {documents.map((document) => (
+              <option value="">{knowledgeSpaceId ? "Select a document in this space" : "Select a document"}</option>
+              {scopedDocuments.map((document) => (
                 <option key={document.document_id} value={document.document_id}>
                   {document.filename} ({document.status})
                 </option>
@@ -664,7 +793,7 @@ export default function Home() {
             </button>
           </div>
 
-          <label htmlFor="documentUpload">Upload document</label>
+          <label htmlFor="documentUpload">{knowledgeSpaceId ? "Upload to knowledge space" : "Upload document"}</label>
           <div className="uploadRow">
             <input
               id="documentUpload"
@@ -712,7 +841,7 @@ export default function Home() {
               className="smallIconButton"
               type="button"
               onClick={startNewConversation}
-              disabled={!hydrated || loading || !documentId}
+              disabled={!hydrated || loading || (!documentId && !knowledgeSpaceId)}
               aria-label="Start new conversation"
               title="Start new conversation"
             >

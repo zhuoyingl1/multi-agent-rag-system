@@ -62,6 +62,12 @@ class QdrantDocumentIndex:
         return len(chunks)
 
     def search(self, document_id: str, query: str, limit: int) -> list[SearchResult]:
+        return self.search_documents([document_id], query, limit)
+
+    def search_documents(self, document_ids: Sequence[str], query: str, limit: int) -> list[SearchResult]:
+        unique_ids = list(dict.fromkeys(document_ids))
+        if not unique_ids:
+            return []
         if not self.client.collection_exists(self.collection):
             return []
         vectors = self.embedder.encode([query])
@@ -69,7 +75,7 @@ class QdrantDocumentIndex:
         response = self.client.query_points(
             collection_name=self.collection,
             query=vectors[0],
-            query_filter=self._document_filter(document_id),
+            query_filter=self._documents_filter(unique_ids),
             limit=limit,
             score_threshold=self.score_threshold,
             with_payload=True,
@@ -127,11 +133,17 @@ class QdrantDocumentIndex:
         )
 
     def _document_filter(self, document_id: str) -> Any:
+        return self._documents_filter([document_id])
+
+    def _documents_filter(self, document_ids: Sequence[str]) -> Any:
         try:
-            from qdrant_client.models import FieldCondition, Filter, MatchValue
+            from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
         except ImportError:
-            return {"must": [{"key": "document_id", "match": {"value": document_id}}]}
-        return Filter(must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))])
+            if len(document_ids) == 1:
+                return {"must": [{"key": "document_id", "match": {"value": document_ids[0]}}]}
+            return {"must": [{"key": "document_id", "match": {"any": list(document_ids)}}]}
+        match = MatchValue(value=document_ids[0]) if len(document_ids) == 1 else MatchAny(any=list(document_ids))
+        return Filter(must=[FieldCondition(key="document_id", match=match)])
 
     def _document_selector(self, document_id: str) -> Any:
         document_filter = self._document_filter(document_id)
@@ -181,18 +193,18 @@ class QdrantDocumentIndex:
 
 
 class QdrantDocumentRetriever:
-    """Retrieve only from vectors previously indexed for one document."""
+    """Retrieve from vectors indexed for one or more documents."""
 
-    def __init__(self, index: QdrantDocumentIndex, document_id: str, top_k: int = 5) -> None:
+    def __init__(self, index: QdrantDocumentIndex, document_id: str | Sequence[str], top_k: int = 5) -> None:
         self.index = index
-        self.document_id = document_id
+        self.document_ids = [document_id] if isinstance(document_id, str) else list(document_id)
         self.top_k = top_k
 
     def index(self, chunks: list[Chunk]) -> None:
         raise RuntimeError("Persistent document chunks must be indexed during ingestion.")
 
     def retrieve(self, query: str, top_k: int | None = None) -> list[SearchResult]:
-        return self.index.search(self.document_id, query, top_k or self.top_k)
+        return self.index.search_documents(self.document_ids, query, top_k or self.top_k)
 
     def close(self) -> None:
         self.index.close()

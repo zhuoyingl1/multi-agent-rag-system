@@ -625,6 +625,23 @@ textarea:focus {
   gap: 8px;
 }
 
+.spaceSelectRow,
+.spaceCreateRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  gap: 8px;
+}
+
+.spaceSelectRow > svg {
+  width: 42px;
+  height: 42px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--brand-dark);
+  background: var(--panel-soft);
+}
+
 .indexedDocumentRow {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 42px 42px;
@@ -755,6 +772,10 @@ textarea:focus {
 
   .uploadRow {
     grid-template-columns: 1fr;
+  }
+
+  .spaceSelectRow {
+    grid-template-columns: minmax(0, 1fr) 42px;
   }
 
   .previewToolbar {

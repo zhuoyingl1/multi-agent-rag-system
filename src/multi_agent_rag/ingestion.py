@@ -64,8 +64,9 @@ class DocumentIngestionService:
         file_size: int,
         file_hash: str,
         metadata: dict[str, Any] | None = None,
+        knowledge_space_id: str | None = None,
     ) -> RegisteredDocument:
-        duplicate = self.documents.find_duplicate(file_hash)
+        duplicate = self.documents.find_duplicate(file_hash, knowledge_space_id)
         if duplicate is not None:
             return RegisteredDocument(document=duplicate, duplicate=True)
         document = self.documents.create(
@@ -75,6 +76,7 @@ class DocumentIngestionService:
             file_size=file_size,
             file_hash=file_hash,
             metadata=metadata,
+            knowledge_space_id=knowledge_space_id,
         )
         return RegisteredDocument(document=document, duplicate=False)
 

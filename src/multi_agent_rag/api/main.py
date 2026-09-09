@@ -15,7 +15,7 @@ from time import perf_counter
 from typing import Any, cast
 from uuid import uuid4
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -43,10 +43,16 @@ from multi_agent_rag.persistence import (
     DocumentRecord,
     DocumentRepository,
     DocumentStatus,
+    KnowledgeSpaceRecord,
+    KnowledgeSpaceRepository,
     MongoStore,
 )
 from multi_agent_rag.retrieval.chunking import chunk_document
-from multi_agent_rag.retrieval.factory import create_document_retriever, create_retriever
+from multi_agent_rag.retrieval.factory import (
+    create_document_retriever,
+    create_document_scope_retriever,
+    create_retriever,
+)
 from multi_agent_rag.retrieval.embeddings import OllamaEmbeddingService
 from multi_agent_rag.retrieval.neo4j_adapter import Neo4jGraphAdapter
 from multi_agent_rag.retrieval.vector_index import QdrantDocumentIndex
@@ -62,6 +68,7 @@ class QueryRequest(BaseModel):
 
     query: str = Field(min_length=1)
     document_id: str | None = None
+    knowledge_space_id: str | None = None
     conversation_id: str | None = None
     document_path: str = Field(default=str(DEFAULT_DOCUMENT_PATH), min_length=1)
     orchestrator: str = Field(default="auto", pattern="^(auto|local|langgraph)$")
@@ -88,6 +95,7 @@ class UploadResponse(BaseModel):
     size_bytes: int
     status: str
     duplicate: bool
+    knowledge_space_id: str | None
 
 
 class DocumentStatusResponse(BaseModel):
@@ -109,6 +117,7 @@ class DocumentStatusResponse(BaseModel):
     indexed_at: datetime | None
     chunk_count: int
     index_stale: bool
+    knowledge_space_id: str | None
 
 
 class DocumentListResponse(BaseModel):
@@ -150,10 +159,44 @@ class DocumentChunkListResponse(BaseModel):
 
 
 class ConversationCreateRequest(BaseModel):
-    """Create a conversation scoped to one indexed document."""
+    """Create a conversation scoped to a document or knowledge space."""
 
-    document_id: str = Field(min_length=1)
+    document_id: str | None = Field(default=None, min_length=1)
+    knowledge_space_id: str | None = Field(default=None, min_length=1)
     title: str | None = Field(default=None, max_length=120)
+
+
+class KnowledgeSpaceCreateRequest(BaseModel):
+    """Create a named multi-document retrieval scope."""
+
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=500)
+
+
+class KnowledgeSpaceResponse(BaseModel):
+    """Knowledge space metadata and its current document count."""
+
+    knowledge_space_id: str
+    name: str
+    description: str
+    document_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeSpaceListResponse(BaseModel):
+    """Paginated knowledge space catalog."""
+
+    knowledge_spaces: list[KnowledgeSpaceResponse]
+    total: int
+    skip: int
+    limit: int
+
+
+class DocumentSpaceUpdateRequest(BaseModel):
+    """Move a document into a knowledge space or leave it unassigned."""
+
+    knowledge_space_id: str | None = Field(default=None, min_length=1)
 
 
 def build_app() -> FastAPI:
@@ -167,7 +210,7 @@ def build_app() -> FastAPI:
             "http://127.0.0.1:3001",
         ],
         allow_credentials=False,
-        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
 
@@ -188,25 +231,87 @@ def build_app() -> FastAPI:
     def health_integrations() -> dict[str, Any]:
         return check_integrations(probe_services=True).to_dict()
 
+    @app.post("/knowledge-spaces")
+    def create_knowledge_space(request: KnowledgeSpaceCreateRequest) -> dict[str, Any]:
+        repository = KnowledgeSpaceRepository.from_store(MONGO_STORE)
+        try:
+            space = repository.create(request.name, request.description)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return knowledge_space_response(space, 0).model_dump()
+
+    @app.get("/knowledge-spaces")
+    def list_knowledge_spaces(
+        skip: int = Query(default=0, ge=0),
+        limit: int = Query(default=50, ge=1, le=100),
+    ) -> dict[str, Any]:
+        spaces = KnowledgeSpaceRepository.from_store(MONGO_STORE)
+        documents = DocumentRepository.from_store(MONGO_STORE)
+        records = spaces.list(skip=skip, limit=limit)
+        return KnowledgeSpaceListResponse(
+            knowledge_spaces=[
+                knowledge_space_response(
+                    space,
+                    documents.count(knowledge_space_id=space.knowledge_space_id),
+                )
+                for space in records
+            ],
+            total=spaces.count(),
+            skip=skip,
+            limit=limit,
+        ).model_dump()
+
     @app.post("/documents/upload")
-    async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)) -> dict[str, Any]:
+    async def upload_document(
+        background_tasks: BackgroundTasks,
+        file: UploadFile = File(...),
+        knowledge_space_id: str | None = Form(default=None),
+    ) -> dict[str, Any]:
+        if knowledge_space_id is not None:
+            get_knowledge_space(knowledge_space_id)
         service = create_document_ingestion_service()
-        return (await save_uploaded_document(file, background_tasks, service)).model_dump()
+        return (await save_uploaded_document(file, background_tasks, service, knowledge_space_id)).model_dump()
 
     @app.get("/documents")
     def list_documents(
         skip: int = Query(default=0, ge=0),
         limit: int = Query(default=50, ge=1, le=100),
         status: DocumentStatus | None = Query(default=None),
+        knowledge_space_id: str | None = Query(default=None),
     ) -> dict[str, Any]:
         repository = DocumentRepository.from_store(MONGO_STORE)
-        documents = repository.list(skip=skip, limit=limit, status=status)
+        if knowledge_space_id is None:
+            documents = repository.list(skip=skip, limit=limit, status=status)
+            total = repository.count(status)
+        else:
+            documents = repository.list(
+                skip=skip,
+                limit=limit,
+                status=status,
+                knowledge_space_id=knowledge_space_id,
+            )
+            total = repository.count(status, knowledge_space_id)
         return DocumentListResponse(
             documents=[document_status_payload(document) for document in documents],
-            total=repository.count(status),
+            total=total,
             skip=skip,
             limit=limit,
         ).model_dump()
+
+    @app.put("/documents/{document_id}/knowledge-space")
+    def update_document_knowledge_space(document_id: str, request: DocumentSpaceUpdateRequest) -> dict[str, Any]:
+        if request.knowledge_space_id is not None:
+            get_knowledge_space(request.knowledge_space_id)
+        repository = DocumentRepository.from_store(MONGO_STORE)
+        try:
+            document = repository.get(document_id)
+            if document is None:
+                raise HTTPException(status_code=404, detail=f"Document not found: {document_id}")
+            repository.set_knowledge_space(document_id, request.knowledge_space_id)
+            updated = repository.get(document_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return document_status_payload(updated or document).model_dump()
 
     @app.get("/documents/{document_id}")
     def document_status(document_id: str) -> dict[str, Any]:
@@ -295,11 +400,15 @@ def build_app() -> FastAPI:
 
     @app.post("/conversations")
     def create_conversation(request: ConversationCreateRequest) -> dict[str, Any]:
-        document = get_ready_document(request.document_id)
-        title = request.title or document.title
-        conversation = ConversationRepository.from_store(MONGO_STORE).create(
-            title=title,
-            document_id=document.document_id,
+        validate_scope_selection(request.document_id, request.knowledge_space_id)
+        document = get_ready_document(request.document_id) if request.document_id else None
+        space = get_ready_knowledge_space(request.knowledge_space_id) if request.knowledge_space_id else None
+        title = request.title or (document.title if document else cast(KnowledgeSpaceRecord, space).name)
+        repository = ConversationRepository.from_store(MONGO_STORE)
+        conversation = (
+            repository.create(title=title, document_id=document.document_id)
+            if document
+            else repository.create(title=title, knowledge_space_id=cast(KnowledgeSpaceRecord, space).knowledge_space_id)
         )
         return conversation_payload(conversation)
 
@@ -382,8 +491,21 @@ def run_query_request(
     on_stage: Callable[[str, object], None] | None = None,
     on_answer_delta: Callable[[str], None] | None = None,
 ) -> WorkflowResult:
+    if request.document_id and request.knowledge_space_id:
+        raise HTTPException(status_code=400, detail="Choose either document_id or knowledge_space_id, not both.")
     history, retrieval_query, conversations = conversation_context(request)
-    if request.document_id:
+    if request.knowledge_space_id:
+        result = safe_run_knowledge_space_query(
+            request.query,
+            request.knowledge_space_id,
+            request.orchestrator,
+            request.require_llm_answer,
+            on_stage,
+            on_answer_delta,
+            retrieval_query,
+            history,
+        )
+    elif request.document_id:
         result = safe_run_document_query(
             request.query,
             request.document_id,
@@ -478,6 +600,31 @@ def run_document_query(
             close()
 
 
+def run_knowledge_space_query(
+    query: str,
+    knowledge_space_id: str,
+    orchestrator: str | None = None,
+    require_llm_answer: bool = False,
+    on_stage: Callable[[str, object], None] | None = None,
+    on_answer_delta: Callable[[str], None] | None = None,
+    retrieval_query: str | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> WorkflowResult:
+    documents = get_ready_knowledge_space_documents(knowledge_space_id)
+    retriever = create_document_scope_retriever([document.document_id for document in documents])
+    try:
+        return create_workflow(
+            retriever,
+            orchestrator=orchestrator,
+            require_llm_answer=require_llm_answer,
+            default_answer_provider="ollama" if require_llm_answer else None,
+        ).run(query, on_stage, on_answer_delta, retrieval_query, conversation_history)
+    finally:
+        close = getattr(retriever, "close", None)
+        if callable(close):
+            close()
+
+
 def create_document_ingestion_service() -> DocumentIngestionService:
     embedder = OllamaEmbeddingService(
         base_url=os.getenv("OLLAMA_BASE_URL") or "http://127.0.0.1:11434",
@@ -509,6 +656,7 @@ async def save_uploaded_document(
     file: UploadFile,
     background_tasks: BackgroundTasks,
     service: DocumentIngestionService,
+    knowledge_space_id: str | None = None,
 ) -> UploadResponse:
     filename = Path(file.filename or "").name
     if not filename:
@@ -534,6 +682,7 @@ async def save_uploaded_document(
         file_size=len(content),
         file_hash=sha256(content).hexdigest(),
         metadata={"content_type": file.content_type},
+        knowledge_space_id=knowledge_space_id,
     )
     document = registered.document
     if registered.duplicate:
@@ -548,6 +697,7 @@ async def save_uploaded_document(
         size_bytes=document.file_size,
         status=document.status.value,
         duplicate=registered.duplicate,
+        knowledge_space_id=document.knowledge_space_id,
     )
 
 
@@ -570,7 +720,57 @@ def document_status_payload(document: DocumentRecord) -> DocumentStatusResponse:
         indexed_at=document.indexed_at,
         chunk_count=document.chunk_count,
         index_stale=document_index_is_stale(document, expected_embedding_model),
+        knowledge_space_id=document.knowledge_space_id,
     )
+
+
+def knowledge_space_response(space: KnowledgeSpaceRecord, document_count: int) -> KnowledgeSpaceResponse:
+    return KnowledgeSpaceResponse(
+        knowledge_space_id=space.knowledge_space_id,
+        name=space.name,
+        description=space.description,
+        document_count=document_count,
+        created_at=space.created_at,
+        updated_at=space.updated_at,
+    )
+
+
+def get_knowledge_space(knowledge_space_id: str) -> KnowledgeSpaceRecord:
+    try:
+        space = KnowledgeSpaceRepository.from_store(MONGO_STORE).get(knowledge_space_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if space is None:
+        raise HTTPException(status_code=404, detail=f"Knowledge space not found: {knowledge_space_id}")
+    return space
+
+
+def get_ready_knowledge_space(knowledge_space_id: str) -> KnowledgeSpaceRecord:
+    space = get_knowledge_space(knowledge_space_id)
+    get_ready_knowledge_space_documents(knowledge_space_id)
+    return space
+
+
+def get_ready_knowledge_space_documents(knowledge_space_id: str) -> list[DocumentRecord]:
+    get_knowledge_space(knowledge_space_id)
+    documents = DocumentRepository.from_store(MONGO_STORE).list(
+        limit=100,
+        status=DocumentStatus.COMPLETED,
+        knowledge_space_id=knowledge_space_id,
+    )
+    ready = [
+        document
+        for document in documents
+        if not document_index_is_stale(document, configured_embedding_model())
+    ]
+    if not ready:
+        raise HTTPException(status_code=400, detail="Knowledge space has no query-ready documents.")
+    return ready
+
+
+def validate_scope_selection(document_id: str | None, knowledge_space_id: str | None) -> None:
+    if bool(document_id) == bool(knowledge_space_id):
+        raise HTTPException(status_code=400, detail="Choose exactly one document or knowledge space.")
 
 
 def configured_embedding_model() -> str:
@@ -596,15 +796,19 @@ def conversation_context(
 ) -> tuple[list[dict[str, str]], str, ConversationRepository | None]:
     if request.conversation_id is None:
         return [], request.query, None
-    if request.document_id is None:
-        raise HTTPException(status_code=400, detail="A conversation query requires document_id.")
+    validate_scope_selection(request.document_id, request.knowledge_space_id)
 
     repository = ConversationRepository.from_store(MONGO_STORE)
     conversation = repository.get(request.conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail=f"Conversation not found: {request.conversation_id}")
-    if conversation.document_id != request.document_id:
-        raise HTTPException(status_code=400, detail="Conversation does not belong to the requested document.")
+    if conversation.document_id != request.document_id or conversation.knowledge_space_id != request.knowledge_space_id:
+        detail = (
+            "Conversation does not belong to the requested document."
+            if request.document_id
+            else "Conversation does not belong to the requested knowledge space."
+        )
+        raise HTTPException(status_code=400, detail=detail)
 
     history = recent_history(conversation.messages)
     retrieval_query, _ = contextualize_retrieval_query(request.query, history)
@@ -616,6 +820,7 @@ def conversation_payload(conversation: ConversationRecord) -> dict[str, Any]:
         "conversation_id": conversation.conversation_id,
         "title": conversation.title,
         "document_id": conversation.document_id,
+        "knowledge_space_id": conversation.knowledge_space_id,
         "created_at": conversation.created_at.isoformat(),
         "updated_at": conversation.updated_at.isoformat(),
         "messages": [
@@ -678,6 +883,31 @@ def safe_run_document_query(
             on_answer_delta=on_answer_delta,
             retrieval_query=retrieval_query,
             conversation_history=conversation_history,
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def safe_run_knowledge_space_query(
+    query: str,
+    knowledge_space_id: str,
+    orchestrator: str | None = None,
+    require_llm_answer: bool = False,
+    on_stage: Callable[[str, object], None] | None = None,
+    on_answer_delta: Callable[[str], None] | None = None,
+    retrieval_query: str | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> WorkflowResult:
+    try:
+        return run_knowledge_space_query(
+            query,
+            knowledge_space_id,
+            orchestrator,
+            require_llm_answer,
+            on_stage,
+            on_answer_delta,
+            retrieval_query,
+            conversation_history,
         )
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -771,7 +1001,9 @@ def _sse(event: str, payload: dict[str, Any]) -> str:
 
 
 def validate_query_source(request: QueryRequest) -> None:
-    if request.document_id:
+    if request.document_id and request.knowledge_space_id:
+        raise HTTPException(status_code=400, detail="Choose either document_id or knowledge_space_id, not both.")
+    if request.document_id or request.knowledge_space_id:
         return
 
     if not Path(request.document_path).is_file():

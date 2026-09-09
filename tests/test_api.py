@@ -17,7 +17,14 @@ from multi_agent_rag.ingestion import (
     DocumentCleanupError,
     RegisteredDocument,
 )
-from multi_agent_rag.persistence import ChunkRecord, ConversationMessage, ConversationRecord, DocumentRecord, DocumentStatus
+from multi_agent_rag.persistence import (
+    ChunkRecord,
+    ConversationMessage,
+    ConversationRecord,
+    DocumentRecord,
+    DocumentStatus,
+    KnowledgeSpaceRecord,
+)
 
 
 def fake_document(status: DocumentStatus = DocumentStatus.PROCESSING) -> DocumentRecord:
@@ -39,6 +46,17 @@ def fake_document(status: DocumentStatus = DocumentStatus.PROCESSING) -> Documen
         chunking_version=CHUNKING_VERSION if status is DocumentStatus.COMPLETED else None,
         embedding_model="nomic-embed-text" if status is DocumentStatus.COMPLETED else None,
         chunk_count=2 if status is DocumentStatus.COMPLETED else 0,
+    )
+
+
+def fake_knowledge_space() -> KnowledgeSpaceRecord:
+    now = datetime.now(UTC)
+    return KnowledgeSpaceRecord(
+        knowledge_space_id="507f1f77bcf86cd799439012",
+        name="Research",
+        description="Related research documents",
+        created_at=now,
+        updated_at=now,
     )
 
 
@@ -79,6 +97,30 @@ def test_cors_allows_next_fallback_port() -> None:
 
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "http://localhost:3001"
+
+
+def test_knowledge_space_endpoints_create_and_list(monkeypatch) -> None:
+    spaces = MagicMock()
+    spaces.create.return_value = fake_knowledge_space()
+    spaces.list.return_value = [fake_knowledge_space()]
+    spaces.count.return_value = 1
+    documents = MagicMock()
+    documents.count.return_value = 2
+    monkeypatch.setattr("multi_agent_rag.api.main.KnowledgeSpaceRepository.from_store", lambda _store: spaces)
+    monkeypatch.setattr("multi_agent_rag.api.main.DocumentRepository.from_store", lambda _store: documents)
+    client = TestClient(build_app())
+
+    created = client.post(
+        "/knowledge-spaces",
+        json={"name": "Research", "description": "Related research documents"},
+    )
+    listed = client.get("/knowledge-spaces?limit=10")
+
+    assert created.status_code == 200
+    assert created.json()["name"] == "Research"
+    assert listed.status_code == 200
+    assert listed.json()["knowledge_spaces"][0]["document_count"] == 2
+    documents.count.assert_called_once_with(knowledge_space_id="507f1f77bcf86cd799439012")
 
 
 def test_query_endpoint_returns_grounded_answer() -> None:
@@ -179,6 +221,56 @@ def test_query_endpoint_uses_persistent_document_id(monkeypatch) -> None:
     assert response.json()["metrics"]["retrieved_sources"] >= 1
 
 
+def test_query_endpoint_uses_knowledge_space_scope(monkeypatch) -> None:
+    expected = run_query(
+        "Compare retrieval approaches.",
+        Path("examples/sample_docs.md"),
+        orchestrator="local",
+        retrieval_backend="local",
+        require_llm_answer=False,
+    )
+    captured: dict[str, str] = {}
+
+    def fake_space_query(query, knowledge_space_id, *_args):
+        captured["query"] = query
+        captured["knowledge_space_id"] = knowledge_space_id
+        return expected
+
+    monkeypatch.setattr("multi_agent_rag.api.main.safe_run_knowledge_space_query", fake_space_query)
+    client = TestClient(build_app())
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "Compare retrieval approaches.",
+            "knowledge_space_id": "507f1f77bcf86cd799439012",
+            "require_llm_answer": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured == {
+        "query": "Compare retrieval approaches.",
+        "knowledge_space_id": "507f1f77bcf86cd799439012",
+    }
+
+
+def test_query_endpoint_rejects_multiple_persistent_scopes() -> None:
+    client = TestClient(build_app())
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "Compare retrieval approaches.",
+            "document_id": "507f1f77bcf86cd799439011",
+            "knowledge_space_id": "507f1f77bcf86cd799439012",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Choose either document_id or knowledge_space_id, not both."
+
+
 def test_query_endpoint_rejects_stale_document_index(monkeypatch) -> None:
     documents = MagicMock()
     documents.get.return_value = replace(fake_document(DocumentStatus.COMPLETED), index_version="outdated")
@@ -226,6 +318,34 @@ def test_create_conversation_scopes_it_to_document(monkeypatch) -> None:
     conversations.create.assert_called_once_with(
         title="Document review",
         document_id="507f1f77bcf86cd799439011",
+    )
+
+
+def test_create_conversation_scopes_it_to_knowledge_space(monkeypatch) -> None:
+    now = datetime.now(UTC)
+    conversations = MagicMock()
+    conversations.create.return_value = ConversationRecord(
+        conversation_id="conversation-id",
+        title="Research",
+        knowledge_space_id="507f1f77bcf86cd799439012",
+        messages=[],
+        created_at=now,
+        updated_at=now,
+    )
+    monkeypatch.setattr("multi_agent_rag.api.main.get_ready_knowledge_space", lambda _space_id: fake_knowledge_space())
+    monkeypatch.setattr("multi_agent_rag.api.main.ConversationRepository.from_store", lambda _store: conversations)
+    client = TestClient(build_app())
+
+    response = client.post(
+        "/conversations",
+        json={"knowledge_space_id": "507f1f77bcf86cd799439012"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["knowledge_space_id"] == "507f1f77bcf86cd799439012"
+    conversations.create.assert_called_once_with(
+        title="Research",
+        knowledge_space_id="507f1f77bcf86cd799439012",
     )
 
 
@@ -461,6 +581,33 @@ def test_document_list_endpoint_returns_paginated_catalog(monkeypatch) -> None:
     assert data["documents"][0]["chunk_count"] == 2
     repository.list.assert_called_once_with(skip=0, limit=10, status=DocumentStatus.COMPLETED)
     repository.count.assert_called_once_with(DocumentStatus.COMPLETED)
+
+
+def test_document_can_be_assigned_to_knowledge_space(monkeypatch) -> None:
+    repository = MagicMock()
+    repository.get.side_effect = [
+        fake_document(DocumentStatus.COMPLETED),
+        replace(
+            fake_document(DocumentStatus.COMPLETED),
+            knowledge_space_id="507f1f77bcf86cd799439012",
+        ),
+    ]
+    repository.set_knowledge_space.return_value = True
+    monkeypatch.setattr("multi_agent_rag.api.main.get_knowledge_space", lambda _space_id: fake_knowledge_space())
+    monkeypatch.setattr("multi_agent_rag.api.main.DocumentRepository.from_store", lambda _store: repository)
+    client = TestClient(build_app())
+
+    response = client.put(
+        "/documents/507f1f77bcf86cd799439011/knowledge-space",
+        json={"knowledge_space_id": "507f1f77bcf86cd799439012"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["knowledge_space_id"] == "507f1f77bcf86cd799439012"
+    repository.set_knowledge_space.assert_called_once_with(
+        "507f1f77bcf86cd799439011",
+        "507f1f77bcf86cd799439012",
+    )
 
 
 def test_document_chunks_endpoint_returns_filtered_locations(monkeypatch) -> None:
