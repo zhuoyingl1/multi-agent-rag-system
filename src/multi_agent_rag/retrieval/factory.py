@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 from multi_agent_rag.persistence import ChunkRepository, MongoStore
+from multi_agent_rag.retrieval.adaptive import AdaptiveTopKPolicy
 from multi_agent_rag.retrieval.embeddings import OllamaEmbeddingService
 from multi_agent_rag.retrieval.factory_types import Retriever
 from multi_agent_rag.retrieval.hybrid import HybridRetriever
@@ -89,4 +90,12 @@ def _with_optional_reranker(retriever: Retriever) -> Retriever:
         retriever=retriever,
         reranker=create_reranker(reranker_model),
         candidate_multiplier=candidate_multiplier,
+        selection_policy=AdaptiveTopKPolicy(
+            enabled=(os.getenv("DYNAMIC_TOP_K_ENABLED") or "true").lower() in {"1", "true", "yes", "on"},
+            min_results=int(os.getenv("DYNAMIC_TOP_K_MIN") or "3"),
+            max_results=int(os.getenv("DYNAMIC_TOP_K_MAX") or "8"),
+            high_gap=float(os.getenv("DYNAMIC_TOP_K_GAP_HIGH") or "2.0"),
+            low_gap=float(os.getenv("DYNAMIC_TOP_K_GAP_LOW") or "0.6"),
+            context_budget_tokens=int(os.getenv("RAG_CONTEXT_BUDGET_TOKENS") or "1600"),
+        ),
     )

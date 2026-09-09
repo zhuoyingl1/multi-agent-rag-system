@@ -43,6 +43,9 @@ def test_workflow_returns_grounded_answer() -> None:
     assert result.metrics["reranker"] == "none"
     assert result.metrics["query_intent"] == "general"
     assert result.metrics["query_variants"] == 1
+    assert result.metrics["selected_k"] == len(result.sources)
+    assert result.metrics["context_tokens"] > 0
+    assert result.metrics["selection_reason"] == "fixed"
     assert result.metrics["answer_type"] == "deterministic"
     assert result.metrics["answer_model"] == "template"
     assert result.metrics["answer_error"] == ""

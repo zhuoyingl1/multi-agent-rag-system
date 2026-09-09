@@ -17,6 +17,7 @@ from multi_agent_rag.workflow import (
     retriever_candidate_count,
     retriever_query_metrics,
     retriever_reranker_name,
+    retriever_selection_metrics,
 )
 
 
@@ -161,6 +162,7 @@ class LangGraphRAGWorkflow:
     ) -> WorkflowResult:
         latency_ms = round((perf_counter() - state["started"]) * 1000, 2)
         query_intent, query_variant_count = retriever_query_metrics(self.retriever)
+        selected_k, context_tokens, selection_reason = retriever_selection_metrics(self.retriever, sources)
         metrics: dict[str, float | int | str] = {
             "selected_agents": len(state["plan"].selected_agents),
             "retrieved_sources": len(sources),
@@ -174,6 +176,9 @@ class LangGraphRAGWorkflow:
             "reranker": retriever_reranker_name(self.retriever),
             "query_intent": query_intent,
             "query_variants": query_variant_count,
+            "selected_k": selected_k,
+            "context_tokens": context_tokens,
+            "selection_reason": selection_reason,
             "answer_type": self.summarizer.answer_type,
             "answer_model": self.summarizer.answer_model,
             "answer_error": self.summarizer.answer_error,

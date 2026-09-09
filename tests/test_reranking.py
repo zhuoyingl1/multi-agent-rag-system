@@ -1,4 +1,5 @@
 from multi_agent_rag.models import Chunk, ChunkType, RetrievalType, SearchResult
+from multi_agent_rag.retrieval.adaptive import AdaptiveTopKPolicy
 from multi_agent_rag.retrieval.reranking import LexicalReranker, RerankingRetriever
 
 
@@ -65,3 +66,18 @@ def test_reranking_retriever_expands_candidate_pool_and_closes_base() -> None:
     assert retriever.last_reranker == "lexical"
     assert len(reranked) == 2
     assert base.closed is True
+
+
+def test_reranking_retriever_applies_adaptive_selection() -> None:
+    base = FakeRetriever([result(f"Evidence {index}", score=1.0 - index * 0.01) for index in range(8)])
+    policy = AdaptiveTopKPolicy(enabled=False, min_results=1, max_results=8, context_budget_tokens=1000)
+    retriever = RerankingRetriever(base, LexicalReranker(), candidate_multiplier=3, selection_policy=policy)
+
+    selected = retriever.retrieve("Evidence", top_k=5)
+
+    assert base.requested_top_k == 15
+    assert len(selected) == 5
+    assert retriever.last_candidate_count == 8
+    assert retriever.last_selected_k == 5
+    assert retriever.last_context_tokens > 0
+    assert retriever.last_selection_reason == "default"

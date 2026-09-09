@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from multi_agent_rag.models import Chunk, RetrievalType, SearchResult
+from multi_agent_rag.retrieval.adaptive import AdaptiveTopKPolicy, estimate_tokens
 from multi_agent_rag.retrieval.tokenization import tokenize
 
 
@@ -84,12 +85,22 @@ class SentenceTransformerReranker:
 class RerankingRetriever:
     """Retriever wrapper that reranks a larger candidate pool."""
 
-    def __init__(self, retriever: Retriever, reranker: Reranker, candidate_multiplier: int = 3) -> None:
+    def __init__(
+        self,
+        retriever: Retriever,
+        reranker: Reranker,
+        candidate_multiplier: int = 3,
+        selection_policy: AdaptiveTopKPolicy | None = None,
+    ) -> None:
         self.retriever = retriever
         self.reranker = reranker
         self.candidate_multiplier = max(1, candidate_multiplier)
+        self.selection_policy = selection_policy
         self.last_candidate_count = 0
         self.last_reranker = reranker.name
+        self.last_selected_k = 0
+        self.last_context_tokens = 0
+        self.last_selection_reason = "not_run"
 
     def index(self, chunks: list[Chunk]) -> None:
         self.retriever.index(chunks)
@@ -97,9 +108,23 @@ class RerankingRetriever:
     def retrieve(self, query: str, top_k: int | None = None) -> list[SearchResult]:
         limit = top_k or 5
         candidate_limit = limit * self.candidate_multiplier
+        if self.selection_policy is not None:
+            candidate_limit = max(candidate_limit, self.selection_policy.max_results)
         candidates = self.retriever.retrieve(query, top_k=candidate_limit)
         self.last_candidate_count = len(candidates)
-        return self.reranker.rerank(query, candidates, limit)
+        rerank_limit = len(candidates) if self.selection_policy is not None else limit
+        ranked = self.reranker.rerank(query, candidates, rerank_limit)
+        if self.selection_policy is None:
+            self.last_selected_k = len(ranked)
+            self.last_context_tokens = sum(estimate_tokens(result.chunk.text) for result in ranked)
+            self.last_selection_reason = "fixed"
+            return ranked
+
+        selection = self.selection_policy.select(ranked, limit)
+        self.last_selected_k = selection.selected_k
+        self.last_context_tokens = selection.estimated_context_tokens
+        self.last_selection_reason = selection.reason
+        return selection.results
 
     def close(self) -> None:
         close = getattr(self.retriever, "close", None)

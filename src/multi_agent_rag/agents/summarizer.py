@@ -255,7 +255,7 @@ class OllamaAnswerComposer(AnswerComposer):
         findings = "\n".join(f"- {result.agent_name}: {result.content}" for result in agent_results[:3])
         evidence = "\n".join(
             f"- {source.chunk.metadata.get('title', source.chunk.document_id)}: {self._bounded_text(source.chunk.text)}"
-            for source in sources[:4]
+            for source in sources
         )
         return (
             f"Question:\n{query}\n\n"

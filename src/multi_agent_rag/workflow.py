@@ -71,6 +71,7 @@ class MultiAgentRAGWorkflow:
         candidate_count = retriever_candidate_count(self.retriever, sources)
         reranker = retriever_reranker_name(self.retriever)
         query_intent, query_variant_count = retriever_query_metrics(self.retriever)
+        selected_k, context_tokens, selection_reason = retriever_selection_metrics(self.retriever, sources)
         if not self._has_enough_evidence(query, sources):
             grounding = self.judge.judge([], [])
             answer = self.summarizer.summarize(query, [], grounding, [])
@@ -88,6 +89,9 @@ class MultiAgentRAGWorkflow:
                 "reranker": reranker,
                 "query_intent": query_intent,
                 "query_variants": query_variant_count,
+                "selected_k": selected_k,
+                "context_tokens": context_tokens,
+                "selection_reason": selection_reason,
                 "answer_type": self.summarizer.answer_type,
                 "answer_model": self.summarizer.answer_model,
                 "answer_error": self.summarizer.answer_error,
@@ -125,6 +129,9 @@ class MultiAgentRAGWorkflow:
             "reranker": reranker,
             "query_intent": query_intent,
             "query_variants": query_variant_count,
+            "selected_k": selected_k,
+            "context_tokens": context_tokens,
+            "selection_reason": selection_reason,
             "answer_type": self.summarizer.answer_type,
             "answer_model": self.summarizer.answer_model,
             "answer_error": self.summarizer.answer_error,
@@ -186,3 +193,14 @@ def retriever_query_metrics(retriever: object) -> tuple[str, int]:
             return str(getattr(plan, "intent", "general")), max(1, len(variants))
         current = getattr(current, "retriever", None)
     return "general", 1
+
+
+def retriever_selection_metrics(retriever: object, sources: list[SearchResult]) -> tuple[int, int, str]:
+    from multi_agent_rag.retrieval.adaptive import estimate_tokens
+
+    selected_k = int(getattr(retriever, "last_selected_k", len(sources)))
+    context_tokens = int(
+        getattr(retriever, "last_context_tokens", sum(estimate_tokens(source.chunk.text) for source in sources))
+    )
+    reason = str(getattr(retriever, "last_selection_reason", "fixed"))
+    return selected_k, context_tokens, reason
