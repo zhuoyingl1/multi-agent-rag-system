@@ -535,6 +535,17 @@ textarea:focus {
   gap: 8px;
 }
 
+.indexedDocumentRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  gap: 8px;
+}
+
+.indexedDocumentRow .smallIconButton {
+  width: 42px;
+  height: 42px;
+}
+
 .uploadButton {
   min-width: 0;
 }

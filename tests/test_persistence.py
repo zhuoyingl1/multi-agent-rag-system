@@ -60,6 +60,32 @@ def test_document_repository_updates_progress_and_completion() -> None:
     assert completed_update["status"] == "completed"
 
 
+def test_document_repository_records_index_configuration() -> None:
+    collection = MagicMock()
+    collection.update_one.return_value = SimpleNamespace(matched_count=1)
+    repository = DocumentRepository(collection)
+    document_id = str(ObjectId())
+
+    assert repository.begin_indexing(document_id, "Reindex requested")
+    assert repository.complete_indexing(
+        document_id,
+        index_version="1",
+        chunking_version="structured-v1",
+        embedding_model="nomic-embed-text",
+        chunk_count=12,
+    )
+
+    started = collection.update_one.call_args_list[0].args[1]["$set"]
+    started_filter = collection.update_one.call_args_list[0].args[0]
+    completed = collection.update_one.call_args_list[1].args[1]["$set"]
+    assert started["status"] == "processing"
+    assert started["current_stage"] == "queued"
+    assert started_filter["status"] == {"$ne": "processing"}
+    assert completed["status"] == "completed"
+    assert completed["chunk_count"] == 12
+    assert completed["embedding_model"] == "nomic-embed-text"
+
+
 def test_document_repository_reads_existing_record() -> None:
     collection = MagicMock()
     document_id = ObjectId()
@@ -85,6 +111,8 @@ def test_document_repository_reads_existing_record() -> None:
     assert record is not None
     assert record.status is DocumentStatus.COMPLETED
     assert record.metadata == {"source": "test"}
+    assert record.index_version is None
+    assert record.chunk_count == 0
 
 
 def test_conversation_repository_creates_and_adds_messages() -> None:

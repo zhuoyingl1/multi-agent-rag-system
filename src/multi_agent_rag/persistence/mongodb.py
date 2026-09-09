@@ -101,6 +101,11 @@ class DocumentRepository:
             "progress_percentage": 0,
             "current_stage": "upload",
             "stage_details": "",
+            "index_version": None,
+            "chunking_version": None,
+            "embedding_model": None,
+            "indexed_at": None,
+            "chunk_count": 0,
             "created_at": now,
             "updated_at": now,
         }
@@ -138,6 +143,56 @@ class DocumentRepository:
                     "current_stage": stage,
                     "stage_details": details,
                     "updated_at": utc_now(),
+                }
+            },
+        )
+        return result.matched_count > 0
+
+    def begin_indexing(self, document_id: str, details: str = "") -> bool:
+        """Mark a document unavailable while all indexes are being replaced."""
+
+        document_filter: dict[str, Any] = _document_filter(document_id)
+        document_filter["status"] = {"$ne": DocumentStatus.PROCESSING.value}
+        result = self.collection.update_one(
+            document_filter,
+            {
+                "$set": {
+                    "status": DocumentStatus.PROCESSING.value,
+                    "progress_percentage": 0,
+                    "current_stage": "queued",
+                    "stage_details": details,
+                    "updated_at": utc_now(),
+                }
+            },
+        )
+        return result.matched_count > 0
+
+    def complete_indexing(
+        self,
+        document_id: str,
+        *,
+        index_version: str,
+        chunking_version: str,
+        embedding_model: str,
+        chunk_count: int,
+    ) -> bool:
+        """Complete ingestion and record the exact index configuration."""
+
+        now = utc_now()
+        result = self.collection.update_one(
+            _document_filter(document_id),
+            {
+                "$set": {
+                    "status": DocumentStatus.COMPLETED.value,
+                    "progress_percentage": 100,
+                    "current_stage": "completed",
+                    "stage_details": f"{chunk_count} chunks indexed",
+                    "index_version": index_version,
+                    "chunking_version": chunking_version,
+                    "embedding_model": embedding_model,
+                    "indexed_at": now,
+                    "chunk_count": chunk_count,
+                    "updated_at": now,
                 }
             },
         )
@@ -302,6 +357,11 @@ def _document_record(document: dict[str, Any]) -> DocumentRecord:
         created_at=document["created_at"],
         updated_at=document["updated_at"],
         metadata=dict(document.get("metadata") or {}),
+        index_version=document.get("index_version"),
+        chunking_version=document.get("chunking_version"),
+        embedding_model=document.get("embedding_model"),
+        indexed_at=document.get("indexed_at"),
+        chunk_count=int(document.get("chunk_count", 0)),
     )
 
 

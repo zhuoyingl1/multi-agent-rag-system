@@ -44,6 +44,16 @@ class Neo4jGraphAdapter:
                 entities = sorted(extract_entities(chunk.text))
                 session.execute_write(self._merge_chunk, chunk, entities)
 
+    def replace_document_chunks(self, document_id: str, chunks: list[Chunk]) -> int:
+        """Replace one document graph in a single Neo4j transaction."""
+
+        if any(chunk.document_id != document_id for chunk in chunks):
+            raise ValueError("Every indexed chunk must belong to the requested document.")
+        indexed_chunks = [(chunk, sorted(extract_entities(chunk.text))) for chunk in chunks]
+        with self._get_driver().session(database=self.database) as session:
+            session.execute_write(self._replace_document, document_id, indexed_chunks)
+        return len(chunks)
+
     def expand_entities(self, query: str, limit: int = 8) -> list[str]:
         entities = sorted(extract_entities(query))
         if not entities:
@@ -123,6 +133,37 @@ class Neo4jGraphAdapter:
             index=chunk.index,
             title=chunk.metadata.get("title", chunk.document_id),
             entities=entities,
+        )
+
+    @classmethod
+    def _replace_document(
+        cls,
+        tx: Any,
+        document_id: str,
+        indexed_chunks: list[tuple[Chunk, list[str]]],
+    ) -> None:
+        tx.run(
+            """
+            MATCH (:RagDocument {id: $document_id})-[:HAS_CHUNK]->(chunk:RagChunk)
+            DETACH DELETE chunk
+            """,
+            document_id=document_id,
+        )
+        tx.run(
+            """
+            MATCH (document:RagDocument {id: $document_id})
+            DETACH DELETE document
+            """,
+            document_id=document_id,
+        )
+        for chunk, entities in indexed_chunks:
+            cls._merge_chunk(tx, chunk, entities)
+        tx.run(
+            """
+            MATCH (entity:RagEntity)
+            WHERE NOT (entity)<-[:MENTIONS]-(:RagChunk)
+            DELETE entity
+            """
         )
 
     @staticmethod

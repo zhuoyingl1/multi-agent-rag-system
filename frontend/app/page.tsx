@@ -54,6 +54,15 @@ type DocumentStatusResponse = {
   progress_percentage: number;
   current_stage: string;
   stage_details: string;
+  index_version: string | null;
+  expected_index_version: string;
+  chunking_version: string | null;
+  expected_chunking_version: string;
+  embedding_model: string | null;
+  expected_embedding_model: string;
+  indexed_at: string | null;
+  chunk_count: number;
+  index_stale: boolean;
 };
 
 type ConversationResponse = {
@@ -132,7 +141,9 @@ export default function Home() {
   const [evaluationError, setEvaluationError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [reindexing, setReindexing] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
+  const [documentStatus, setDocumentStatus] = useState<DocumentStatusResponse | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
   const sourceCount = result?.sources.length ?? 0;
@@ -140,7 +151,7 @@ export default function Home() {
   const answerMode = formatAnswerMode(result?.metrics);
   const answerWarning = formatAnswerWarning(result?.metrics);
   const uploadDisabled = !hydrated || uploading || !selectedFile;
-  const runDisabled = !hydrated || loading || !query.trim() || !documentId;
+  const runDisabled = !hydrated || loading || reindexing || !query.trim() || !documentId || Boolean(documentStatus?.index_stale);
   const evaluationDisabled = !hydrated || evaluating;
   const groundingScore = useMemo(() => {
     const value = result?.metrics.grounding_score;
@@ -250,6 +261,7 @@ export default function Home() {
     setUploadStatus(null);
     setError(null);
     setDocumentId("");
+    setDocumentStatus(null);
     setConversationId("");
     setResult(null);
     setStreamedAnswer("");
@@ -266,9 +278,13 @@ export default function Home() {
       const uploaded = (await response.json()) as UploadResponse;
       setDocumentName(uploaded.filename);
       setUploadStatus(`Indexing ${uploaded.filename}`);
-      await waitForDocument(uploaded.document_id, uploaded.filename);
+      const status = await waitForDocument(uploaded.document_id, uploaded.filename);
       setDocumentId(uploaded.document_id);
-      setUploadStatus(`Ready: ${uploaded.filename}`);
+      setUploadStatus(
+        status.index_stale
+          ? `Index update required: ${uploaded.filename}`
+          : `Ready: ${uploaded.filename} (${status.chunk_count} chunks)`,
+      );
     } catch (caught) {
       setUploadStatus(null);
       setError(caught instanceof Error ? caught.message : "Upload failed");
@@ -277,15 +293,16 @@ export default function Home() {
     }
   }
 
-  async function waitForDocument(documentId: string, filename: string) {
+  async function waitForDocument(documentId: string, filename: string): Promise<DocumentStatusResponse> {
     for (let attempt = 0; attempt < 120; attempt += 1) {
       const response = await fetch(`${apiBaseUrl}/documents/${documentId}`);
       if (!response.ok) {
         throw new Error(await readErrorMessage(response, `Document status request failed with ${response.status}`));
       }
       const status = (await response.json()) as DocumentStatusResponse;
+      setDocumentStatus(status);
       if (status.status === "completed") {
-        return;
+        return status;
       }
       if (status.status === "failed") {
         throw new Error(status.stage_details || "Document indexing failed");
@@ -294,6 +311,30 @@ export default function Home() {
       await new Promise((resolve) => window.setTimeout(resolve, 500));
     }
     throw new Error("Document indexing timed out");
+  }
+
+  async function reindexDocument() {
+    if (!documentId) {
+      return;
+    }
+    setReindexing(true);
+    setError(null);
+    setConversationId("");
+    setResult(null);
+    setStreamedAnswer("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/documents/${documentId}/reindex`, { method: "POST" });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, `Reindex request failed with ${response.status}`));
+      }
+      setUploadStatus(`Reindexing ${documentName}`);
+      const status = await waitForDocument(documentId, documentName);
+      setUploadStatus(`Ready: ${documentName} (${status.chunk_count} chunks)`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Reindex failed");
+    } finally {
+      setReindexing(false);
+    }
   }
 
   async function ensureConversation() {
@@ -438,7 +479,19 @@ export default function Home() {
           </div>
 
           <label htmlFor="indexedDocument">Indexed document</label>
-          <input id="indexedDocument" value={documentName} placeholder="Upload a document to begin" readOnly />
+          <div className="indexedDocumentRow">
+            <input id="indexedDocument" value={documentName} placeholder="Upload a document to begin" readOnly />
+            <button
+              className="smallIconButton"
+              type="button"
+              onClick={reindexDocument}
+              disabled={!hydrated || !documentId || uploading || reindexing || loading}
+              aria-label="Reindex document"
+              title="Reindex document"
+            >
+              <RefreshCw className={reindexing ? "spin" : ""} size={17} />
+            </button>
+          </div>
 
           <label htmlFor="documentUpload">Upload document</label>
           <div className="uploadRow">

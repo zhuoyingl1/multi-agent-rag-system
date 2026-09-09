@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime
 from hashlib import sha256
 import json
 import os
@@ -24,7 +25,12 @@ from multi_agent_rag.conversation import contextualize_retrieval_query, recent_h
 from multi_agent_rag.documents import SUPPORTED_EXTENSIONS, load_document
 from multi_agent_rag.evaluation import EvalReport, run_evaluation
 from multi_agent_rag.integrations import check_integrations
-from multi_agent_rag.ingestion import DocumentIngestionService
+from multi_agent_rag.ingestion import (
+    CHUNKING_VERSION,
+    INDEX_VERSION,
+    DocumentIngestionService,
+    document_index_is_stale,
+)
 from multi_agent_rag.models import AgentPlan, AgentResult, JudgeResult, SearchResult, WorkflowResult
 from multi_agent_rag.observability import metrics_registry
 from multi_agent_rag.orchestration import create_workflow
@@ -92,6 +98,15 @@ class DocumentStatusResponse(BaseModel):
     progress_percentage: int
     current_stage: str
     stage_details: str
+    index_version: str | None
+    expected_index_version: str
+    chunking_version: str | None
+    expected_chunking_version: str
+    embedding_model: str | None
+    expected_embedding_model: str
+    indexed_at: datetime | None
+    chunk_count: int
+    index_stale: bool
 
 
 class ConversationCreateRequest(BaseModel):
@@ -146,6 +161,22 @@ def build_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if document is None:
             raise HTTPException(status_code=404, detail=f"Document not found: {document_id}")
+        return document_status_payload(document).model_dump()
+
+    @app.post("/documents/{document_id}/reindex")
+    def reindex_document(document_id: str, background_tasks: BackgroundTasks) -> dict[str, Any]:
+        service = create_document_ingestion_service()
+        try:
+            document = service.prepare_reindex(document_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        background_tasks.add_task(service.process, document.document_id, document.file_path)
         return document_status_payload(document).model_dump()
 
     @app.post("/conversations")
@@ -316,6 +347,8 @@ def run_document_query(
         raise ValueError(f"Document not found: {document_id}")
     if document.status is not DocumentStatus.COMPLETED:
         raise RuntimeError(f"Document is not ready for queries: {document.status.value}")
+    if document_index_is_stale(document, configured_embedding_model()):
+        raise RuntimeError("Document index is stale. Reindex the document before querying it.")
 
     retriever = create_document_retriever(document_id)
     try:
@@ -404,6 +437,7 @@ async def save_uploaded_document(
 
 
 def document_status_payload(document: DocumentRecord) -> DocumentStatusResponse:
+    expected_embedding_model = configured_embedding_model()
     return DocumentStatusResponse(
         document_id=document.document_id,
         filename=document.title,
@@ -412,7 +446,20 @@ def document_status_payload(document: DocumentRecord) -> DocumentStatusResponse:
         progress_percentage=document.progress_percentage,
         current_stage=document.current_stage,
         stage_details=document.stage_details,
+        index_version=document.index_version,
+        expected_index_version=INDEX_VERSION,
+        chunking_version=document.chunking_version,
+        expected_chunking_version=CHUNKING_VERSION,
+        embedding_model=document.embedding_model,
+        expected_embedding_model=expected_embedding_model,
+        indexed_at=document.indexed_at,
+        chunk_count=document.chunk_count,
+        index_stale=document_index_is_stale(document, expected_embedding_model),
     )
+
+
+def configured_embedding_model() -> str:
+    return os.getenv("OLLAMA_EMBEDDING_MODEL") or "nomic-embed-text"
 
 
 def get_ready_document(document_id: str) -> DocumentRecord:
@@ -424,6 +471,8 @@ def get_ready_document(document_id: str) -> DocumentRecord:
         raise HTTPException(status_code=404, detail=f"Document not found: {document_id}")
     if document.status is not DocumentStatus.COMPLETED:
         raise HTTPException(status_code=400, detail=f"Document is not ready for queries: {document.status.value}")
+    if document_index_is_stale(document, configured_embedding_model()):
+        raise HTTPException(status_code=409, detail="Document index is stale. Reindex the document before querying it.")
     return document
 
 

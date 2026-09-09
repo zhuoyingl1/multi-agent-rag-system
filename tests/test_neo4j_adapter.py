@@ -74,6 +74,25 @@ def test_neo4j_adapter_indexes_chunks_and_expands_entities() -> None:
     assert driver.closed is True
 
 
+def test_neo4j_adapter_replaces_document_graph_before_indexing() -> None:
+    driver = FakeDriver()
+    adapter = Neo4jGraphAdapter(
+        uri="bolt://localhost:7687",
+        user="neo4j",
+        password="password123",
+        driver=driver,
+    )
+    chunks = chunk_document(Document(title="graph.md", text="Neo4j connects current RAG evidence."))
+
+    count = adapter.replace_document_chunks(chunks[0].document_id, chunks)
+
+    assert count == len(chunks)
+    assert driver.tx.writes[0] == {"document_id": chunks[0].document_id}
+    assert driver.tx.writes[1] == {"document_id": chunks[0].document_id}
+    assert driver.tx.writes[2]["chunk_id"] == chunks[0].chunk_id
+    assert driver.tx.writes[-1] == {}
+
+
 def test_neo4j_adapter_retrieves_document_scoped_chunk_matches() -> None:
     driver = FakeDriver()
     adapter = Neo4jGraphAdapter(

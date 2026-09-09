@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-Step 27 adds live Ollama readiness checks so API and frontend demos can show whether the local answer model is reachable.
+The application now supports persistent, versioned document indexing across MongoDB, Qdrant, and Neo4j, plus grounded multi-turn answers through Ollama.
 
 ## Implemented Capabilities
 
@@ -24,7 +24,7 @@ Step 27 adds live Ollama readiness checks so API and frontend demos can show whe
 - UTF-8 CLI output configuration for PDF text with special characters
 - Clean answer-only final responses with evidence and metrics exposed separately
 - Direct answer formatting for project-style and evidence-backed questions
-- FastAPI application with `/health`, `/health/metrics`, `/query`, and `/query/stream`
+- FastAPI application with health, document, conversation, query, streaming, and evaluation endpoints
 - In-memory metrics registry for local observability
 - Next.js console for query, streaming, metrics, and source inspection
 - SSE workflow events with progressive answer delta rendering
@@ -43,10 +43,17 @@ Step 27 adds live Ollama readiness checks so API and frontend demos can show whe
 - Configurable reranking wrapper for local, Qdrant, and BGE-style candidate reranking
 - Local Ollama answer composer with API/frontend LLM answer enforcement and answer provider metrics
 - Live Ollama service and model readiness reporting in the integration dashboard
+- Persistent document metadata and structured chunks in MongoDB
+- Document-scoped vectors in Qdrant and entity relationships in Neo4j
+- Index version metadata with stale-index detection and explicit reindexing
+- Idempotent replacement of MongoDB chunks, Qdrant vectors, and Neo4j graph nodes
+- Persistent document-scoped conversations with context-aware follow-up queries
+- Token-level Ollama answer streaming over SSE
+- Source citations with page, line, row, section, and JSON-path locators
 
 ## Planned Capabilities
 
-- Production adapter implementations backed by live external services
+- Production deployment hardening, authentication, and larger benchmark coverage
 
 ## Quick Start
 

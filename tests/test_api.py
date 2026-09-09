@@ -10,7 +10,7 @@ pytest.importorskip("anyio")
 from fastapi.testclient import TestClient
 
 from multi_agent_rag.api.main import build_app, run_query
-from multi_agent_rag.ingestion import RegisteredDocument
+from multi_agent_rag.ingestion import CHUNKING_VERSION, INDEX_VERSION, RegisteredDocument
 from multi_agent_rag.persistence import ConversationMessage, ConversationRecord, DocumentRecord, DocumentStatus
 
 
@@ -29,6 +29,10 @@ def fake_document(status: DocumentStatus = DocumentStatus.PROCESSING) -> Documen
         stage_details="",
         created_at=now,
         updated_at=now,
+        index_version=INDEX_VERSION if status is DocumentStatus.COMPLETED else None,
+        chunking_version=CHUNKING_VERSION if status is DocumentStatus.COMPLETED else None,
+        embedding_model="nomic-embed-text" if status is DocumentStatus.COMPLETED else None,
+        chunk_count=2 if status is DocumentStatus.COMPLETED else 0,
     )
 
 
@@ -167,6 +171,25 @@ def test_query_endpoint_uses_persistent_document_id(monkeypatch) -> None:
         "document_id": "507f1f77bcf86cd799439011",
     }
     assert response.json()["metrics"]["retrieved_sources"] >= 1
+
+
+def test_query_endpoint_rejects_stale_document_index(monkeypatch) -> None:
+    documents = MagicMock()
+    documents.get.return_value = replace(fake_document(DocumentStatus.COMPLETED), index_version="outdated")
+    monkeypatch.setattr("multi_agent_rag.api.main.DocumentRepository.from_store", lambda _store: documents)
+    client = TestClient(build_app())
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "How does RAG reduce hallucination?",
+            "document_id": "507f1f77bcf86cd799439011",
+            "require_llm_answer": False,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Document index is stale. Reindex the document before querying it."
 
 
 def test_create_conversation_scopes_it_to_document(monkeypatch) -> None:
@@ -412,6 +435,34 @@ def test_document_status_endpoint_returns_processing_state(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["status"] == "processing"
     assert response.json()["progress_percentage"] == 0
+    assert response.json()["expected_index_version"] == INDEX_VERSION
+    assert response.json()["index_stale"] is False
+
+
+def test_reindex_endpoint_queues_existing_document(monkeypatch) -> None:
+    service = MagicMock()
+    service.prepare_reindex.return_value = fake_document(DocumentStatus.PROCESSING)
+    monkeypatch.setattr("multi_agent_rag.api.main.create_document_ingestion_service", lambda: service)
+    client = TestClient(build_app())
+
+    response = client.post("/documents/507f1f77bcf86cd799439011/reindex")
+
+    assert response.status_code == 200
+    assert response.json()["current_stage"] == "processing"
+    service.prepare_reindex.assert_called_once_with("507f1f77bcf86cd799439011")
+    service.process.assert_called_once()
+
+
+def test_reindex_endpoint_rejects_concurrent_request(monkeypatch) -> None:
+    service = MagicMock()
+    service.prepare_reindex.side_effect = RuntimeError("Document indexing is already in progress.")
+    monkeypatch.setattr("multi_agent_rag.api.main.create_document_ingestion_service", lambda: service)
+    client = TestClient(build_app())
+
+    response = client.post("/documents/507f1f77bcf86cd799439011/reindex")
+
+    assert response.status_code == 409
+    assert "already in progress" in response.json()["detail"]
 
 
 def test_stream_endpoint_returns_all_events() -> None:

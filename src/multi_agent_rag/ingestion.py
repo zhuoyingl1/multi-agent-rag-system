@@ -12,6 +12,9 @@ from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.neo4j_adapter import Neo4jGraphAdapter
 from multi_agent_rag.retrieval.vector_index import QdrantDocumentIndex
 
+INDEX_VERSION = "1"
+CHUNKING_VERSION = "structured-v1"
+
 
 @dataclass(frozen=True)
 class RegisteredDocument:
@@ -66,14 +69,20 @@ class DocumentIngestionService:
             self.documents.update_progress(document_id, 60, "chunking")
             chunks = chunk_document(document)
             self.documents.update_progress(document_id, 75, "storing", f"{len(chunks)} chunks")
-            self.chunks.replace_document_chunks(document_id, chunks)
             if self.vector_index is not None:
                 self.documents.update_progress(document_id, 85, "indexing", f"{len(chunks)} vectors")
                 self.vector_index.replace_document_chunks(document_id, chunks)
             if self.graph_index is not None:
                 self.documents.update_progress(document_id, 92, "graph_indexing", f"{len(chunks)} chunks")
-                self.graph_index.index(chunks)
-            self.documents.update_status(document_id, DocumentStatus.COMPLETED)
+                self.graph_index.replace_document_chunks(document_id, chunks)
+            self.chunks.replace_document_chunks(document_id, chunks)
+            self.documents.complete_indexing(
+                document_id,
+                index_version=INDEX_VERSION,
+                chunking_version=CHUNKING_VERSION,
+                embedding_model=self.embedding_model,
+                chunk_count=len(chunks),
+            )
             return len(chunks)
         except Exception as exc:
             self.documents.update_status(document_id, DocumentStatus.FAILED, str(exc))
@@ -84,3 +93,37 @@ class DocumentIngestionService:
 
     def get(self, document_id: str) -> DocumentRecord | None:
         return self.documents.get(document_id)
+
+    @property
+    def embedding_model(self) -> str:
+        embedder = getattr(self.vector_index, "embedder", None)
+        return str(getattr(embedder, "model_name", "none"))
+
+    def prepare_reindex(self, document_id: str) -> DocumentRecord:
+        document = self.documents.get(document_id)
+        if document is None:
+            raise KeyError(f"Document not found: {document_id}")
+        if document.status is DocumentStatus.PROCESSING:
+            raise RuntimeError("Document indexing is already in progress.")
+        if not Path(document.file_path).is_file():
+            raise FileNotFoundError(f"Document file not found: {document.file_path}")
+        if not self.documents.begin_indexing(document_id, "Reindex requested"):
+            raise RuntimeError("Document indexing is already in progress.")
+        refreshed = self.documents.get(document_id)
+        return refreshed or replace(
+            document,
+            status=DocumentStatus.PROCESSING,
+            progress_percentage=0,
+            current_stage="queued",
+            stage_details="Reindex requested",
+        )
+
+
+def document_index_is_stale(document: DocumentRecord, embedding_model: str) -> bool:
+    """Report whether a completed document uses the current index configuration."""
+
+    return document.status is DocumentStatus.COMPLETED and (
+        document.index_version != INDEX_VERSION
+        or document.chunking_version != CHUNKING_VERSION
+        or document.embedding_model != embedding_model
+    )

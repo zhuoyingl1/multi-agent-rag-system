@@ -33,6 +33,11 @@ class DocumentRecord:
     created_at: datetime
     updated_at: datetime
     metadata: dict[str, Any] = field(default_factory=dict)
+    index_version: str | None = None
+    chunking_version: str | None = None
+    embedding_model: str | None = None
+    indexed_at: datetime | None = None
+    chunk_count: int = 0
 
 
 @dataclass(frozen=True)
