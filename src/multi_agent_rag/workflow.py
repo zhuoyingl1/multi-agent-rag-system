@@ -9,6 +9,7 @@ from multi_agent_rag.agents.experts import ExpertAgent
 from multi_agent_rag.agents.judge import GroundingJudge
 from multi_agent_rag.agents.planner import PlannerAgent
 from multi_agent_rag.agents.summarizer import SummarizerAgent
+from multi_agent_rag.citations import citation_metrics
 from multi_agent_rag.models import AgentResult, RetrievalType, SearchResult, WorkflowResult
 from multi_agent_rag.retrieval.hybrid import HybridRetriever
 from multi_agent_rag.retrieval.tokenization import tokenize
@@ -95,6 +96,7 @@ class MultiAgentRAGWorkflow:
                 "answer_type": self.summarizer.answer_type,
                 "answer_model": self.summarizer.answer_model,
                 "answer_error": self.summarizer.answer_error,
+                **citation_metrics(answer, []),
             }
             return WorkflowResult(
                 query=query,
@@ -135,6 +137,7 @@ class MultiAgentRAGWorkflow:
             "answer_type": self.summarizer.answer_type,
             "answer_model": self.summarizer.answer_model,
             "answer_error": self.summarizer.answer_error,
+            **citation_metrics(answer, sources),
         }
         return WorkflowResult(
             query=query,

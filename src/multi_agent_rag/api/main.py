@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from multi_agent_rag.documents import load_document
+from multi_agent_rag.citations import build_citation_diagnostics, citation_id
 from multi_agent_rag.documents import SUPPORTED_EXTENSIONS
 from multi_agent_rag.evaluation import EvalReport, run_evaluation
 from multi_agent_rag.integrations import check_integrations
@@ -152,7 +153,13 @@ def build_app() -> FastAPI:
 
         def events():
             yield _sse("planning", {"selected_agents": result.plan.selected_agents, "tasks": result.plan.tasks})
-            yield _sse("retrieval", {"count": len(result.sources), "sources": [source_payload(source) for source in result.sources]})
+            yield _sse(
+                "retrieval",
+                {
+                    "count": len(result.sources),
+                    "sources": [source_payload(source, citation_id(index)) for index, source in enumerate(result.sources)],
+                },
+            )
             yield _sse("agents", {"agents": [agent_payload(agent) for agent in result.agents]})
             yield _sse("judge", result.grounding.__dict__)
             for delta in answer_deltas(result.answer):
@@ -373,7 +380,8 @@ def workflow_payload(result: WorkflowResult) -> dict[str, Any]:
         "plan": result.plan.__dict__,
         "agents": [agent_payload(agent) for agent in result.agents],
         "grounding": result.grounding.__dict__,
-        "sources": [source_payload(source) for source in result.sources],
+        "citations": build_citation_diagnostics(result.answer, result.sources),
+        "sources": [source_payload(source, citation_id(index)) for index, source in enumerate(result.sources)],
         "metrics": result.metrics,
     }
 
@@ -391,6 +399,10 @@ def workflow_trace_payload(result: WorkflowResult) -> dict[str, Any]:
         "selected_k": result.metrics.get("selected_k", len(result.sources)),
         "context_tokens": result.metrics.get("context_tokens", 0),
         "selection_reason": result.metrics.get("selection_reason", "fixed"),
+        "citation_status": result.metrics.get("citation_status", "no_evidence"),
+        "citation_coverage": result.metrics.get("citation_coverage", 0.0),
+        "cited_sources": result.metrics.get("cited_sources", 0),
+        "invalid_citations": result.metrics.get("invalid_citations", 0),
         "answer_type": result.metrics.get("answer_type", "deterministic"),
         "answer_model": result.metrics.get("answer_model", "template"),
         "answer_error": result.metrics.get("answer_error", ""),
@@ -410,8 +422,8 @@ def agent_payload(agent: AgentResult) -> dict[str, Any]:
     }
 
 
-def source_payload(source: SearchResult) -> dict[str, Any]:
-    return {
+def source_payload(source: SearchResult, evidence_id: str | None = None) -> dict[str, Any]:
+    payload = {
         "chunk_id": source.chunk.chunk_id,
         "document_id": source.chunk.document_id,
         "title": source.chunk.metadata.get("title"),
@@ -421,6 +433,9 @@ def source_payload(source: SearchResult) -> dict[str, Any]:
         "highlights": source.highlights,
         "text": source.chunk.text,
     }
+    if evidence_id is not None:
+        payload["citation_id"] = evidence_id
+    return payload
 
 
 def _sse(event: str, payload: dict[str, Any]) -> str:

@@ -1,0 +1,51 @@
+from multi_agent_rag.citations import build_citation_diagnostics, extract_citation_ids, format_evidence_context
+from multi_agent_rag.models import Chunk, ChunkType, RetrievalType, SearchResult
+
+
+def source(index: int) -> SearchResult:
+    return SearchResult(
+        chunk=Chunk(
+            document_id="doc-1",
+            chunk_id=f"chunk-{index}",
+            text=f"Evidence statement {index}.",
+            chunk_type=ChunkType.PROSE,
+            index=index,
+            metadata={"title": "notes.md"},
+        ),
+        score=1.0 - index * 0.1,
+        retrieval_type=RetrievalType.HYBRID,
+    )
+
+
+def test_evidence_context_assigns_ranked_citation_ids() -> None:
+    context = format_evidence_context([source(0), source(1)])
+
+    assert "[S1] Source: notes.md; chunk: 0" in context
+    assert "[S2] Source: notes.md; chunk: 1" in context
+
+
+def test_extract_citation_ids_deduplicates_in_first_use_order() -> None:
+    assert extract_citation_ids("Use [S2], then [S1], and repeat [S2].") == ["S2", "S1"]
+
+
+def test_citation_diagnostics_reports_complete_and_partial_answers() -> None:
+    sources = [source(0), source(1)]
+
+    complete = build_citation_diagnostics("First [S1]. Second [S2].", sources)
+    partial = build_citation_diagnostics("Only first [S1].", sources)
+
+    assert complete["status"] == "complete"
+    assert complete["coverage"] == 1.0
+    assert partial["status"] == "partial"
+    assert partial["unused_citation_ids"] == ["S2"]
+
+
+def test_citation_diagnostics_flags_missing_and_invalid_ids() -> None:
+    sources = [source(0)]
+
+    missing = build_citation_diagnostics("No citation is present.", sources)
+    invalid = build_citation_diagnostics("Unsupported reference [S9].", sources)
+
+    assert missing["status"] == "missing"
+    assert invalid["status"] == "invalid"
+    assert invalid["invalid_citation_ids"] == ["S9"]

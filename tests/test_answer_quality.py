@@ -97,6 +97,11 @@ def test_ollama_answer_composer_returns_chat_content(monkeypatch) -> None:
     assert captured_payload["path"] == "/api/chat"
     assert captured_payload["payload"]["model"] == "qwen2.5:3b"
     assert captured_payload["payload"]["stream"] is False
+    system_prompt = captured_payload["payload"]["messages"][0]["content"]
+    prompt = captured_payload["payload"]["messages"][1]["content"]
+    assert "do not discuss citation ids in prose" in system_prompt
+    assert "[S1] Source: rag.md" in prompt
+    assert "place citations immediately after" in prompt
 
 
 def test_create_answer_composer_supports_ollama(monkeypatch) -> None:

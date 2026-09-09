@@ -49,6 +49,8 @@ def test_workflow_returns_grounded_answer() -> None:
     assert result.metrics["answer_type"] == "deterministic"
     assert result.metrics["answer_model"] == "template"
     assert result.metrics["answer_error"] == ""
+    assert result.metrics["citation_status"] == "missing"
+    assert result.metrics["citation_coverage"] == 0.0
 
 
 def test_workflow_reports_reranker_metrics() -> None:

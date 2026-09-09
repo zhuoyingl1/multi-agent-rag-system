@@ -4,6 +4,7 @@ import { Activity, BarChart3, Bot, Database, FileText, Loader2, Network, Play, R
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type Source = {
+  citation_id: string;
   chunk_id: string;
   title: string | null;
   chunk_type: string;
@@ -444,6 +445,7 @@ export default function Home() {
             {(result?.sources ?? []).map((source) => (
               <article className="sourceItem" key={source.chunk_id}>
                 <div className="sourceMeta">
+                  <span>[{source.citation_id}]</span>
                   <span>{source.title ?? source.chunk_id}</span>
                   <span>{source.retrieval_type}</span>
                   <span>score {source.score}</span>
@@ -465,7 +467,9 @@ export default function Home() {
             <h2>Events</h2>
           </div>
           <div className="events">
-            {events.length === 0 ? <span>No stream events yet.</span> : events.map((event, index) => <span key={`${event}-${index}`}>{event}</span>)}
+            {events.length === 0
+              ? <span>No stream events yet.</span>
+              : events.map((event, index) => <span key={`${event}-${index}`}>{event}</span>)}
           </div>
         </div>
 

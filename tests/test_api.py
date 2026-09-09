@@ -97,11 +97,16 @@ def test_query_endpoint_returns_grounded_answer() -> None:
     assert data["workflow_trace"]["selected_k"] == len(data["sources"])
     assert data["workflow_trace"]["context_tokens"] > 0
     assert data["workflow_trace"]["selection_reason"] == "fixed"
+    assert data["workflow_trace"]["citation_status"] == "missing"
+    assert data["citations"]["evidence_count"] == len(data["sources"])
+    assert [source["citation_id"] for source in data["sources"]] == [
+        f"S{index}" for index in range(1, len(data["sources"]) + 1)
+    ]
 
 
 def test_query_endpoint_uses_llm_answer_by_default(monkeypatch) -> None:
     def fake_post(_self, _path, _payload):
-        return {"message": {"content": "RAG reduces hallucination by grounding answers in retrieved evidence."}}
+        return {"message": {"content": "RAG reduces hallucination by grounding answers in retrieved evidence [S1]."}}
 
     monkeypatch.setattr("multi_agent_rag.agents.summarizer.OllamaAnswerComposer._post_json", fake_post)
     client = TestClient(build_app())
@@ -113,9 +118,10 @@ def test_query_endpoint_uses_llm_answer_by_default(monkeypatch) -> None:
 
     assert response.status_code == 200
     data = response.json()
-    assert data["answer"] == "RAG reduces hallucination by grounding answers in retrieved evidence."
+    assert data["answer"] == "RAG reduces hallucination by grounding answers in retrieved evidence [S1]."
     assert data["metrics"]["answer_type"] == "llm"
     assert data["metrics"]["answer_model"] == "qwen2.5:3b"
+    assert data["citations"]["valid_citation_ids"] == ["S1"]
 
 
 def test_query_endpoint_uses_persistent_document_id(monkeypatch) -> None:

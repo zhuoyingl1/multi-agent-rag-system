@@ -8,6 +8,7 @@ from typing import Any
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
 
+from multi_agent_rag.citations import format_evidence_context
 from multi_agent_rag.models import AgentResult, JudgeResult, SearchResult
 
 
@@ -238,6 +239,9 @@ class OllamaAnswerComposer(AnswerComposer):
                         "You answer questions using only the retrieved evidence. "
                         "Write clear, direct natural language. "
                         "Do not include headings, workflow traces, scores, or source lists. "
+                        "Cite every factual claim with one or more provided evidence ids such as [S1]. "
+                        "Place citations at the end of the supported sentence and do not discuss citation ids in prose. "
+                        "Never invent an evidence id. "
                         "Use one or two short paragraphs. Say when the evidence is insufficient."
                     ),
                 },
@@ -253,23 +257,13 @@ class OllamaAnswerComposer(AnswerComposer):
 
     def _prompt(self, query: str, agent_results: list[AgentResult], sources: list[SearchResult]) -> str:
         findings = "\n".join(f"- {result.agent_name}: {result.content}" for result in agent_results[:3])
-        evidence = "\n".join(
-            f"- {source.chunk.metadata.get('title', source.chunk.document_id)}: {self._bounded_text(source.chunk.text)}"
-            for source in sources
-        )
+        evidence = format_evidence_context(sources)
         return (
             f"Question:\n{query}\n\n"
             f"Specialist findings:\n{findings or '- No specialist findings.'}\n\n"
             f"Retrieved evidence:\n{evidence}\n\n"
-            "Write only the final answer."
+            "Write only the final answer and place citations immediately after the claims they support."
         )
-
-    def _bounded_text(self, text: str, max_chars: int = 700) -> str:
-        compact = " ".join(text.split())
-        if len(compact) <= max_chars:
-            return compact
-        boundary = compact.rfind(" ", 0, max_chars)
-        return compact[: boundary if boundary > max_chars // 2 else max_chars].rstrip() + "..."
 
     def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         body = json.dumps(payload).encode("utf-8")
