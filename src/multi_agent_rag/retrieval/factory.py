@@ -10,6 +10,7 @@ from multi_agent_rag.retrieval.factory_types import Retriever
 from multi_agent_rag.retrieval.hybrid import HybridRetriever
 from multi_agent_rag.retrieval.neo4j_adapter import Neo4jGraphAdapter, Neo4jGraphRetriever
 from multi_agent_rag.retrieval.persistent_hybrid import MongoKeywordRetriever, PersistentHybridRetriever
+from multi_agent_rag.retrieval.query_planning import RetrievalQueryPlanner
 from multi_agent_rag.retrieval.vector_index import QdrantDocumentIndex, QdrantDocumentRetriever
 
 
@@ -60,11 +61,16 @@ def create_document_retriever(document_id: str, top_k: int = 5) -> Retriever:
         database=os.getenv("NEO4J_DATABASE") or "neo4j",
     )
     graph = Neo4jGraphRetriever(graph_adapter, chunks, document_id)
+    query_planner = RetrievalQueryPlanner(
+        rewrite_enabled=(os.getenv("QUERY_REWRITE_ENABLED") or "true").lower() in {"1", "true", "yes", "on"},
+        max_variants=int(os.getenv("QUERY_REWRITE_MAX_VARIANTS") or "3"),
+    )
     retriever = PersistentHybridRetriever(
         vector,
         keyword,
         store,
         graph=graph,
+        query_planner=query_planner,
         top_k=top_k,
         rrf_k=float(os.getenv("RRF_K") or "60"),
     )

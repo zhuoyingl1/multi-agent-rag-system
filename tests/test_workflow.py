@@ -41,6 +41,8 @@ def test_workflow_returns_grounded_answer() -> None:
     assert result.metrics["evidence_status"] == "sufficient"
     assert result.metrics["mode"] == "deterministic_local"
     assert result.metrics["reranker"] == "none"
+    assert result.metrics["query_intent"] == "general"
+    assert result.metrics["query_variants"] == 1
     assert result.metrics["answer_type"] == "deterministic"
     assert result.metrics["answer_model"] == "template"
     assert result.metrics["answer_error"] == ""

@@ -70,6 +70,7 @@ class MultiAgentRAGWorkflow:
         sources = self.retriever.retrieve(query, top_k=self.top_k)
         candidate_count = retriever_candidate_count(self.retriever, sources)
         reranker = retriever_reranker_name(self.retriever)
+        query_intent, query_variant_count = retriever_query_metrics(self.retriever)
         if not self._has_enough_evidence(query, sources):
             grounding = self.judge.judge([], [])
             answer = self.summarizer.summarize(query, [], grounding, [])
@@ -85,6 +86,8 @@ class MultiAgentRAGWorkflow:
                 "mode": "deterministic_local",
                 "evidence_status": "insufficient",
                 "reranker": reranker,
+                "query_intent": query_intent,
+                "query_variants": query_variant_count,
                 "answer_type": self.summarizer.answer_type,
                 "answer_model": self.summarizer.answer_model,
                 "answer_error": self.summarizer.answer_error,
@@ -120,6 +123,8 @@ class MultiAgentRAGWorkflow:
             "mode": "deterministic_local",
             "evidence_status": "sufficient",
             "reranker": reranker,
+            "query_intent": query_intent,
+            "query_variants": query_variant_count,
             "answer_type": self.summarizer.answer_type,
             "answer_model": self.summarizer.answer_model,
             "answer_error": self.summarizer.answer_error,
@@ -170,3 +175,14 @@ def retriever_candidate_count(retriever: object, sources: list[SearchResult]) ->
 
 def retriever_reranker_name(retriever: object) -> str:
     return str(getattr(retriever, "last_reranker", "none"))
+
+
+def retriever_query_metrics(retriever: object) -> tuple[str, int]:
+    current: object | None = retriever
+    while current is not None:
+        plan = getattr(current, "last_query_plan", None)
+        if plan is not None:
+            variants = getattr(plan, "query_variants", [])
+            return str(getattr(plan, "intent", "general")), max(1, len(variants))
+        current = getattr(current, "retriever", None)
+    return "general", 1

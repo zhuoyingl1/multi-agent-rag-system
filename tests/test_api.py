@@ -92,6 +92,8 @@ def test_query_endpoint_returns_grounded_answer() -> None:
     assert data["workflow_trace"]["mode"] == "deterministic_local"
     assert data["workflow_trace"]["evidence_status"] == "sufficient"
     assert data["workflow_trace"]["selected_agents"]
+    assert data["workflow_trace"]["query_intent"] == "general"
+    assert data["workflow_trace"]["query_variants"] == 1
 
 
 def test_query_endpoint_uses_llm_answer_by_default(monkeypatch) -> None:

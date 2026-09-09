@@ -10,6 +10,7 @@ import math
 from multi_agent_rag.models import Chunk, ChunkType, RetrievalType, SearchResult
 from multi_agent_rag.persistence import ChunkRepository, MongoStore
 from multi_agent_rag.retrieval.factory_types import Retriever
+from multi_agent_rag.retrieval.query_planning import RetrievalQueryPlan, RetrievalQueryPlanner
 from multi_agent_rag.retrieval.tokenization import tokenize
 
 
@@ -116,6 +117,18 @@ def reciprocal_rank_fusion(
     ]
 
 
+def merge_query_variant_results(groups: list[list[SearchResult]]) -> list[SearchResult]:
+    """Keep the strongest result per chunk across rewritten query variants."""
+
+    strongest: dict[str, SearchResult] = {}
+    for group in groups:
+        for result in group:
+            current = strongest.get(result.chunk.chunk_id)
+            if current is None or result.score > current.score:
+                strongest[result.chunk.chunk_id] = result
+    return sorted(strongest.values(), key=lambda item: item.score, reverse=True)
+
+
 class PersistentHybridRetriever:
     """Run persistent vector, BM25, and graph retrieval concurrently."""
 
@@ -125,17 +138,20 @@ class PersistentHybridRetriever:
         keyword: Retriever,
         store: MongoStore,
         graph: Retriever | None = None,
+        query_planner: RetrievalQueryPlanner | None = None,
         top_k: int = 5,
         rrf_k: float = 60.0,
     ) -> None:
         self.vector = vector
         self.keyword = keyword
         self.graph = graph
+        self.query_planner = query_planner or RetrievalQueryPlanner()
         self.store = store
         self.top_k = top_k
         self.rrf_k = rrf_k
         self.last_candidate_count = 0
         self.last_errors: dict[str, str] = {}
+        self.last_query_plan = RetrievalQueryPlan("general", False, [])
 
     def index(self, chunks: list[Chunk]) -> None:
         raise RuntimeError("Persistent document chunks must be indexed during ingestion.")
@@ -143,22 +159,34 @@ class PersistentHybridRetriever:
     def retrieve(self, query: str, top_k: int | None = None) -> list[SearchResult]:
         limit = top_k or self.top_k
         candidate_limit = max(50, limit * 3)
+        self.last_query_plan = self.query_planner.plan(query)
         retrievers = [("vector", self.vector, 1.0), ("keyword", self.keyword, 0.8)]
         if self.graph is not None:
             retrievers.append(("graph", self.graph, 0.7))
 
         self.last_errors = {}
-        ranked_lists: list[tuple[list[SearchResult], float]] = []
-        with ThreadPoolExecutor(max_workers=len(retrievers)) as executor:
-            futures = {
-                name: (executor.submit(retriever.retrieve, query, candidate_limit), weight)
-                for name, retriever, weight in retrievers
-            }
-            for name, (future, weight) in futures.items():
+        grouped_results: dict[str, list[list[SearchResult]]] = {name: [] for name, _, _ in retrievers}
+        tasks = [
+            (name, variant_index, retriever, variant)
+            for name, retriever, _ in retrievers
+            for variant_index, variant in enumerate(self.last_query_plan.query_variants)
+        ]
+        with ThreadPoolExecutor(max_workers=min(6, len(tasks))) as executor:
+            futures = [
+                (name, variant_index, executor.submit(retriever.retrieve, variant, candidate_limit))
+                for name, variant_index, retriever, variant in tasks
+            ]
+            for name, variant_index, future in futures:
                 try:
-                    ranked_lists.append((future.result(), weight))
+                    grouped_results[name].append(future.result())
                 except Exception as exc:
-                    self.last_errors[name] = f"{exc.__class__.__name__}: {exc}"
+                    self.last_errors[f"{name}[{variant_index}]"] = f"{exc.__class__.__name__}: {exc}"
+
+        weights = {name: weight for name, _, weight in retrievers}
+        ranked_lists = [
+            (merge_query_variant_results(grouped_results[name]), weights[name])
+            for name, _, _ in retrievers
+        ]
 
         all_results = [result for results, _ in ranked_lists for result in results]
         self.last_candidate_count = len({result.chunk.chunk_id for result in all_results})

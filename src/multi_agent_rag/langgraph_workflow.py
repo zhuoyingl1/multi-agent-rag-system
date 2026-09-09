@@ -12,7 +12,12 @@ from multi_agent_rag.agents.planner import PlannerAgent
 from multi_agent_rag.agents.summarizer import SummarizerAgent
 from multi_agent_rag.models import AgentPlan, AgentResult, Coordination, JudgeResult, SearchResult, WorkflowResult
 from multi_agent_rag.retrieval.hybrid import HybridRetriever
-from multi_agent_rag.workflow import has_enough_evidence, retriever_candidate_count, retriever_reranker_name
+from multi_agent_rag.workflow import (
+    has_enough_evidence,
+    retriever_candidate_count,
+    retriever_query_metrics,
+    retriever_reranker_name,
+)
 
 
 class LangGraphState(TypedDict, total=False):
@@ -155,6 +160,7 @@ class LangGraphRAGWorkflow:
         evidence_status: str,
     ) -> WorkflowResult:
         latency_ms = round((perf_counter() - state["started"]) * 1000, 2)
+        query_intent, query_variant_count = retriever_query_metrics(self.retriever)
         metrics: dict[str, float | int | str] = {
             "selected_agents": len(state["plan"].selected_agents),
             "retrieved_sources": len(sources),
@@ -166,6 +172,8 @@ class LangGraphRAGWorkflow:
             "mode": "langgraph",
             "evidence_status": evidence_status,
             "reranker": retriever_reranker_name(self.retriever),
+            "query_intent": query_intent,
+            "query_variants": query_variant_count,
             "answer_type": self.summarizer.answer_type,
             "answer_model": self.summarizer.answer_model,
             "answer_error": self.summarizer.answer_error,

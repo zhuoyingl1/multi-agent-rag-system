@@ -102,4 +102,29 @@ def test_persistent_hybrid_retriever_continues_when_graph_fails() -> None:
     results = retriever.retrieve("What evidence is available?")
 
     assert [item.chunk.chunk_id for item in results] == ["chunk-1"]
-    assert retriever.last_errors == {"graph": "RuntimeError: Neo4j unavailable"}
+    assert retriever.last_errors == {
+        "graph[0]": "RuntimeError: Neo4j unavailable",
+        "graph[1]": "RuntimeError: Neo4j unavailable",
+    }
+
+
+def test_persistent_hybrid_retriever_merges_rewritten_query_results() -> None:
+    vector = MagicMock()
+    keyword = MagicMock()
+    graph = MagicMock()
+    store = MagicMock()
+    shared = result("chunk-1", "Qdrant and Neo4j work together.", 0.8, RetrievalType.VECTOR)
+    vector.retrieve.return_value = [shared]
+    keyword.retrieve.return_value = []
+    graph.retrieve.return_value = []
+    retriever = PersistentHybridRetriever(vector, keyword, store, graph=graph)
+
+    results = retriever.retrieve("Compare Qdrant and Neo4j retrieval.")
+
+    assert [item.chunk.chunk_id for item in results] == ["chunk-1"]
+    assert retriever.last_query_plan.intent == "compare"
+    assert len(retriever.last_query_plan.query_variants) == 3
+    assert vector.retrieve.call_count == 3
+    assert keyword.retrieve.call_count == 3
+    assert graph.retrieve.call_count == 3
+    assert retriever.last_candidate_count == 1
