@@ -4,7 +4,10 @@ import {
   Activity,
   BarChart3,
   Bot,
+  ChevronLeft,
+  ChevronRight,
   Database,
+  FileSearch,
   FileText,
   Loader2,
   MessageSquarePlus,
@@ -12,6 +15,7 @@ import {
   Play,
   Radio,
   RefreshCw,
+  Search,
   Send,
   Trash2,
   Upload,
@@ -70,6 +74,25 @@ type DocumentStatusResponse = {
 
 type DocumentListResponse = {
   documents: DocumentStatusResponse[];
+  total: number;
+  skip: number;
+  limit: number;
+};
+
+type ChunkPreview = {
+  chunk_id: string;
+  index: number;
+  chunk_type: string;
+  text: string;
+  source_locator: {
+    label: string;
+  };
+};
+
+type DocumentChunkListResponse = {
+  document_id: string;
+  filename: string;
+  chunks: ChunkPreview[];
   total: number;
   skip: number;
   limit: number;
@@ -156,7 +179,13 @@ export default function Home() {
   const [documentStatus, setDocumentStatus] = useState<DocumentStatusResponse | null>(null);
   const [documents, setDocuments] = useState<DocumentStatusResponse[]>([]);
   const [deleting, setDeleting] = useState(false);
+  const [chunkPreview, setChunkPreview] = useState<DocumentChunkListResponse | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewQuery, setPreviewQuery] = useState("");
+  const [previewType, setPreviewType] = useState("");
   const [hydrated, setHydrated] = useState(false);
+  const previewLimit = 5;
 
   const sourceCount = result?.sources.length ?? 0;
   const displayedAnswer = result?.answer ?? streamedAnswer;
@@ -318,6 +347,7 @@ export default function Home() {
           : `Ready: ${uploaded.filename} (${status.chunk_count} chunks)`,
       );
       await refreshDocuments();
+      await loadChunkPreview(uploaded.document_id);
     } catch (caught) {
       setUploadStatus(null);
       setError(caught instanceof Error ? caught.message : "Upload failed");
@@ -364,6 +394,7 @@ export default function Home() {
       const status = await waitForDocument(documentId, documentName);
       setUploadStatus(`Ready: ${documentName} (${status.chunk_count} chunks)`);
       await refreshDocuments();
+      await loadChunkPreview(documentId);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Reindex failed");
     } finally {
@@ -381,14 +412,20 @@ export default function Home() {
     setStreamedAnswer("");
     setEvents([]);
     setError(null);
+    setPreviewQuery("");
+    setPreviewType("");
     if (!selected) {
       setUploadStatus(null);
+      setChunkPreview(null);
     } else if (selected.index_stale) {
       setUploadStatus(`Index update required: ${selected.filename}`);
     } else if (selected.status === "completed") {
       setUploadStatus(`Ready: ${selected.filename} (${selected.chunk_count} chunks)`);
     } else {
       setUploadStatus(`${selected.current_stage}: ${selected.progress_percentage}%`);
+    }
+    if (selected) {
+      void loadChunkPreview(selected.document_id, 0, "", "");
     }
   }
 
@@ -411,11 +448,46 @@ export default function Home() {
       setStreamedAnswer("");
       setEvents([]);
       setUploadStatus(null);
+      setChunkPreview(null);
+      setPreviewQuery("");
+      setPreviewType("");
       await refreshDocuments();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Delete failed");
     } finally {
       setDeleting(false);
+    }
+  }
+
+  async function loadChunkPreview(
+    selectedDocumentId = documentId,
+    skip = 0,
+    queryValue = previewQuery,
+    typeValue = previewType,
+  ) {
+    if (!selectedDocumentId) {
+      setChunkPreview(null);
+      return;
+    }
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const params = new URLSearchParams({ skip: skip.toString(), limit: previewLimit.toString() });
+      if (queryValue.trim()) {
+        params.set("q", queryValue.trim());
+      }
+      if (typeValue) {
+        params.set("chunk_type", typeValue);
+      }
+      const response = await fetch(`${apiBaseUrl}/documents/${selectedDocumentId}/chunks?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, `Chunk preview request failed with ${response.status}`));
+      }
+      setChunkPreview((await response.json()) as DocumentChunkListResponse);
+    } catch (caught) {
+      setPreviewError(caught instanceof Error ? caught.message : "Chunk preview failed");
+    } finally {
+      setPreviewLoading(false);
     }
   }
 
@@ -667,6 +739,86 @@ export default function Home() {
           <Metric label="Runs" value={metrics?.run_count.toString() ?? "0"} />
           <Metric label="Avg latency" value={`${metrics?.average_latency_ms.toFixed(2) ?? "0.00"} ms`} />
         </div>
+
+        <section className="previewPanel">
+          <div className="sectionHeader previewHeader">
+            <div className="answerTitle">
+              <FileSearch size={18} />
+              <h2>Indexed Chunks</h2>
+            </div>
+            <span>{chunkPreview?.total ?? 0} matches</span>
+          </div>
+          <div className="previewToolbar">
+            <input
+              value={previewQuery}
+              onChange={(event) => setPreviewQuery(event.target.value)}
+              placeholder="Search indexed chunks"
+              aria-label="Search indexed chunks"
+            />
+            <select value={previewType} onChange={(event) => setPreviewType(event.target.value)} aria-label="Chunk type">
+              <option value="">All types</option>
+              <option value="prose">Prose</option>
+              <option value="code">Code</option>
+              <option value="table">Table</option>
+              <option value="formula">Formula</option>
+            </select>
+            <button
+              className="smallIconButton"
+              type="button"
+              onClick={() => loadChunkPreview(documentId, 0)}
+              disabled={!documentId || previewLoading}
+              aria-label="Search chunks"
+              title="Search chunks"
+            >
+              {previewLoading ? <Loader2 className="spin" size={17} /> : <Search size={17} />}
+            </button>
+          </div>
+          {previewError && <div className="compactError">{previewError}</div>}
+          {!previewError && !previewLoading && documentId && chunkPreview?.chunks.length === 0 && (
+            <div className="previewEmpty">No indexed chunks match these filters.</div>
+          )}
+          <div className="previewList">
+            {(chunkPreview?.chunks ?? []).map((chunk) => (
+              <article className="previewItem" key={chunk.chunk_id}>
+                <div className="previewMeta">
+                  <span>#{chunk.index}</span>
+                  <span>{chunk.chunk_type}</span>
+                  <span>{chunk.source_locator.label}</span>
+                </div>
+                <p>{chunk.text}</p>
+              </article>
+            ))}
+          </div>
+          {chunkPreview && chunkPreview.total > 0 && (
+            <div className="previewFooter">
+              <span>
+                {chunkPreview.skip + 1}-{Math.min(chunkPreview.skip + chunkPreview.chunks.length, chunkPreview.total)} of {chunkPreview.total}
+              </span>
+              <div>
+                <button
+                  className="smallIconButton"
+                  type="button"
+                  onClick={() => loadChunkPreview(documentId, Math.max(0, chunkPreview.skip - previewLimit))}
+                  disabled={previewLoading || chunkPreview.skip === 0}
+                  aria-label="Previous chunk page"
+                  title="Previous page"
+                >
+                  <ChevronLeft size={17} />
+                </button>
+                <button
+                  className="smallIconButton"
+                  type="button"
+                  onClick={() => loadChunkPreview(documentId, chunkPreview.skip + previewLimit)}
+                  disabled={previewLoading || chunkPreview.skip + chunkPreview.chunks.length >= chunkPreview.total}
+                  aria-label="Next chunk page"
+                  title="Next page"
+                >
+                  <ChevronRight size={17} />
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
 
         <div className="sourcePanel">
           <div className="sectionHeader">

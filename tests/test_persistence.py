@@ -244,3 +244,40 @@ def test_chunk_and_conversation_repositories_delete_document_data() -> None:
     assert ConversationRepository(conversations).delete_for_document("document-id") == 2
     chunks.delete_many.assert_called_once_with({"document_id": "document-id"})
     conversations.delete_many.assert_called_once_with({"document_id": "document-id"})
+
+
+def test_chunk_repository_lists_filtered_preview_page() -> None:
+    collection = MagicMock()
+    now = datetime.now(UTC)
+    collection.find.return_value = FakeCursor(
+        [
+            {
+                "_id": "chunk-2",
+                "document_id": "document-id",
+                "text": "Qdrant stores document vectors.",
+                "chunk_type": "prose",
+                "index": 2,
+                "metadata": {"line_start": "8", "line_end": "9"},
+                "created_at": now,
+            }
+        ]
+    )
+    collection.count_documents.return_value = 1
+
+    records, total = ChunkRepository(collection).list_page(
+        "document-id",
+        skip=0,
+        limit=5,
+        chunk_type="prose",
+        query="Qdrant?",
+    )
+
+    assert total == 1
+    assert records[0].chunk_id == "chunk-2"
+    expected_filter = {
+        "document_id": "document-id",
+        "chunk_type": "prose",
+        "text": {"$regex": "Qdrant\\?", "$options": "i"},
+    }
+    collection.find.assert_called_once_with(expected_filter)
+    collection.count_documents.assert_called_once_with(expected_filter)

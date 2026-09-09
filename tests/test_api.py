@@ -17,7 +17,7 @@ from multi_agent_rag.ingestion import (
     DocumentCleanupError,
     RegisteredDocument,
 )
-from multi_agent_rag.persistence import ConversationMessage, ConversationRecord, DocumentRecord, DocumentStatus
+from multi_agent_rag.persistence import ChunkRecord, ConversationMessage, ConversationRecord, DocumentRecord, DocumentStatus
 
 
 def fake_document(status: DocumentStatus = DocumentStatus.PROCESSING) -> DocumentRecord:
@@ -461,6 +461,45 @@ def test_document_list_endpoint_returns_paginated_catalog(monkeypatch) -> None:
     assert data["documents"][0]["chunk_count"] == 2
     repository.list.assert_called_once_with(skip=0, limit=10, status=DocumentStatus.COMPLETED)
     repository.count.assert_called_once_with(DocumentStatus.COMPLETED)
+
+
+def test_document_chunks_endpoint_returns_filtered_locations(monkeypatch) -> None:
+    document_repository = MagicMock()
+    document_repository.get.return_value = fake_document(DocumentStatus.COMPLETED)
+    chunk_repository = MagicMock()
+    chunk_repository.list_page.return_value = (
+        [
+            ChunkRecord(
+                chunk_id="chunk-2",
+                document_id="507f1f77bcf86cd799439011",
+                text="Qdrant stores document vectors.",
+                chunk_type="prose",
+                index=2,
+                metadata={"line_start": "8", "line_end": "9"},
+                created_at=datetime.now(UTC),
+            )
+        ],
+        1,
+    )
+    monkeypatch.setattr("multi_agent_rag.api.main.DocumentRepository.from_store", lambda _store: document_repository)
+    monkeypatch.setattr("multi_agent_rag.api.main.ChunkRepository.from_store", lambda _store: chunk_repository)
+    client = TestClient(build_app())
+
+    response = client.get(
+        "/documents/507f1f77bcf86cd799439011/chunks?skip=0&limit=5&chunk_type=prose&q=Qdrant"
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["chunks"][0]["source_locator"]["label"] == "lines 8-9"
+    chunk_repository.list_page.assert_called_once_with(
+        "507f1f77bcf86cd799439011",
+        skip=0,
+        limit=5,
+        chunk_type="prose",
+        query="Qdrant",
+    )
 
 
 def test_delete_document_endpoint_cleans_registered_document(monkeypatch) -> None:

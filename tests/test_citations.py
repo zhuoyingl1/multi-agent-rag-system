@@ -1,4 +1,4 @@
-from multi_agent_rag.citations import build_citation_diagnostics, extract_citation_ids, format_evidence_context
+from multi_agent_rag.citations import build_citation_diagnostics, build_source_locator, extract_citation_ids, format_evidence_context
 from multi_agent_rag.models import Chunk, ChunkType, RetrievalType, SearchResult
 
 
@@ -51,3 +51,14 @@ def test_citation_diagnostics_flags_missing_and_invalid_ids() -> None:
     assert missing["status"] == "missing"
     assert invalid["status"] == "invalid"
     assert invalid["invalid_citation_ids"] == ["S9"]
+
+
+def test_source_locator_can_be_reused_for_stored_chunk_preview() -> None:
+    locator = build_source_locator(3, {"page_start": "2", "page_end": "4"})
+
+    assert locator == {
+        "label": "pages 2-4",
+        "chunk_index": 3,
+        "page_start": 2,
+        "page_end": 4,
+    }

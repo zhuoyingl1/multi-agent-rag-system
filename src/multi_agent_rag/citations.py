@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Mapping
 
 from multi_agent_rag.models import SearchResult
 
@@ -34,7 +34,12 @@ def format_evidence_context(sources: list[SearchResult], max_chars: int = 700) -
 def source_locator(source: SearchResult) -> dict[str, int | str]:
     """Build a compact human-readable location from chunk metadata."""
 
-    metadata = source.chunk.metadata
+    return build_source_locator(source.chunk.index, source.chunk.metadata)
+
+
+def build_source_locator(chunk_index: int, metadata: Mapping[str, object]) -> dict[str, int | str]:
+    """Build a source locator for retrieval results and stored chunk previews."""
+
     page_start = _optional_int(metadata.get("page_start"))
     page_end = _optional_int(metadata.get("page_end"))
     line_start = _optional_int(metadata.get("line_start"))
@@ -47,9 +52,9 @@ def source_locator(source: SearchResult) -> dict[str, int | str]:
         final_line = line_end or line_start
         label = f"line {line_start}" if final_line == line_start else f"lines {line_start}-{final_line}"
     else:
-        label = f"chunk {source.chunk.index}"
+        label = f"chunk {chunk_index}"
 
-    locator: dict[str, int | str] = {"label": label, "chunk_index": source.chunk.index}
+    locator: dict[str, int | str] = {"label": label, "chunk_index": chunk_index}
     for key, value in (
         ("page_start", page_start),
         ("page_end", page_end),

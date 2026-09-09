@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from multi_agent_rag.citations import build_citation_diagnostics, citation_id, source_locator
+from multi_agent_rag.citations import build_citation_diagnostics, build_source_locator, citation_id, source_locator
 from multi_agent_rag.conversation import contextualize_retrieval_query, recent_history
 from multi_agent_rag.documents import SUPPORTED_EXTENSIONS, load_document
 from multi_agent_rag.evaluation import EvalReport, run_evaluation
@@ -33,7 +33,7 @@ from multi_agent_rag.ingestion import (
     DocumentIngestionService,
     document_index_is_stale,
 )
-from multi_agent_rag.models import AgentPlan, AgentResult, JudgeResult, SearchResult, WorkflowResult
+from multi_agent_rag.models import AgentPlan, AgentResult, ChunkType, JudgeResult, SearchResult, WorkflowResult
 from multi_agent_rag.observability import metrics_registry
 from multi_agent_rag.orchestration import create_workflow
 from multi_agent_rag.persistence import (
@@ -128,6 +128,27 @@ class DocumentDeleteResponse(BaseModel):
     deleted: bool
 
 
+class ChunkPreviewResponse(BaseModel):
+    """One stored chunk exposed for document inspection."""
+
+    chunk_id: str
+    index: int
+    chunk_type: str
+    text: str
+    source_locator: dict[str, int | str]
+
+
+class DocumentChunkListResponse(BaseModel):
+    """Paginated stored chunk preview for one document."""
+
+    document_id: str
+    filename: str
+    chunks: list[ChunkPreviewResponse]
+    total: int
+    skip: int
+    limit: int
+
+
 class ConversationCreateRequest(BaseModel):
     """Create a conversation scoped to one indexed document."""
 
@@ -196,6 +217,46 @@ def build_app() -> FastAPI:
         if document is None:
             raise HTTPException(status_code=404, detail=f"Document not found: {document_id}")
         return document_status_payload(document).model_dump()
+
+    @app.get("/documents/{document_id}/chunks")
+    def document_chunks(
+        document_id: str,
+        skip: int = Query(default=0, ge=0),
+        limit: int = Query(default=20, ge=1, le=100),
+        chunk_type: ChunkType | None = Query(default=None),
+        q: str | None = Query(default=None, max_length=200),
+    ) -> dict[str, Any]:
+        try:
+            document = DocumentRepository.from_store(MONGO_STORE).get(document_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if document is None:
+            raise HTTPException(status_code=404, detail=f"Document not found: {document_id}")
+
+        records, total = ChunkRepository.from_store(MONGO_STORE).list_page(
+            document_id,
+            skip=skip,
+            limit=limit,
+            chunk_type=chunk_type.value if chunk_type is not None else None,
+            query=q,
+        )
+        return DocumentChunkListResponse(
+            document_id=document_id,
+            filename=document.title,
+            chunks=[
+                ChunkPreviewResponse(
+                    chunk_id=record.chunk_id,
+                    index=record.index,
+                    chunk_type=record.chunk_type,
+                    text=record.text,
+                    source_locator=build_source_locator(record.index, record.metadata),
+                )
+                for record in records
+            ],
+            total=total,
+            skip=skip,
+            limit=limit,
+        ).model_dump()
 
     @app.post("/documents/{document_id}/reindex")
     def reindex_document(document_id: str, background_tasks: BackgroundTasks) -> dict[str, Any]:

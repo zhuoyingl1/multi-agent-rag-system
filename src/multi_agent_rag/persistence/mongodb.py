@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -244,6 +245,23 @@ class ChunkRepository:
     def list_for_document(self, document_id: str) -> list[ChunkRecord]:
         cursor = self.collection.find({"document_id": document_id}).sort("index", 1)
         return [_chunk_record(chunk) for chunk in cursor]
+
+    def list_page(
+        self,
+        document_id: str,
+        *,
+        skip: int = 0,
+        limit: int = 20,
+        chunk_type: str | None = None,
+        query: str | None = None,
+    ) -> tuple[list[ChunkRecord], int]:
+        chunk_filter: dict[str, Any] = {"document_id": document_id}
+        if chunk_type:
+            chunk_filter["chunk_type"] = chunk_type
+        if query and query.strip():
+            chunk_filter["text"] = {"$regex": re.escape(query.strip()), "$options": "i"}
+        cursor = self.collection.find(chunk_filter).sort("index", 1).skip(skip).limit(limit)
+        return [_chunk_record(chunk) for chunk in cursor], int(self.collection.count_documents(chunk_filter))
 
     def delete_for_document(self, document_id: str) -> int:
         return int(self.collection.delete_many({"document_id": document_id}).deleted_count)
