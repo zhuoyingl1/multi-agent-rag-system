@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+from collections.abc import Callable
 from typing import Protocol
 
 from multi_agent_rag.models import WorkflowResult
@@ -14,7 +15,12 @@ from multi_agent_rag.workflow import MultiAgentRAGWorkflow
 class WorkflowRunner(Protocol):
     """Shared workflow interface for local and LangGraph orchestrators."""
 
-    def run(self, query: str) -> WorkflowResult:
+    def run(
+        self,
+        query: str,
+        on_stage: Callable[[str, object], None] | None = None,
+        on_answer_delta: Callable[[str], None] | None = None,
+    ) -> WorkflowResult:
         """Run a query through the selected workflow."""
 
 

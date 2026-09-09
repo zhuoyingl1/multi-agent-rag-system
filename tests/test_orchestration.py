@@ -42,3 +42,18 @@ def test_create_workflow_rejects_forced_langgraph_without_package(monkeypatch: p
 
     with pytest.raises(RuntimeError, match="LangGraph orchestrator requested"):
         create_workflow(build_retriever(), orchestrator="langgraph")
+
+
+def test_local_workflow_reports_stream_stages_and_answer() -> None:
+    workflow = create_workflow(build_retriever(), orchestrator="local")
+    stages = []
+    deltas = []
+
+    result = workflow.run(
+        "How does RAG reduce hallucination?",
+        lambda event, _value: stages.append(event),
+        deltas.append,
+    )
+
+    assert stages == ["planning", "retrieval", "agents", "judge"]
+    assert "".join(deltas) == result.answer

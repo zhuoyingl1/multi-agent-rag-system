@@ -104,6 +104,32 @@ def test_ollama_answer_composer_returns_chat_content(monkeypatch) -> None:
     assert "place citations immediately after" in prompt
 
 
+def test_ollama_answer_composer_streams_chat_deltas(monkeypatch) -> None:
+    document = Document(title="rag.md", text="RAG grounds answers in retrieved evidence.")
+    retriever = HybridRetriever()
+    retriever.index(chunk_document(document))
+    sources = retriever.retrieve("How does RAG ground answers?", top_k=3)
+    composer = OllamaAnswerComposer(model="qwen2.5:3b")
+    captured_payload = {}
+
+    def fake_stream(path, payload):
+        captured_payload["path"] = path
+        captured_payload["payload"] = payload
+        yield {"message": {"content": "RAG grounds "}, "done": False}
+        yield {"message": {"content": "answers in evidence "}, "done": False}
+        yield {"message": {"content": "[S1]."}, "done": True}
+
+    monkeypatch.setattr(composer, "_stream_json", fake_stream)
+    deltas = []
+
+    answer = composer.compose_stream("How does RAG ground answers?", [], sources, deltas.append)
+
+    assert answer == "RAG grounds answers in evidence [S1]."
+    assert deltas == ["RAG grounds ", "answers in evidence ", "[S1]."]
+    assert captured_payload["path"] == "/api/chat"
+    assert captured_payload["payload"]["stream"] is True
+
+
 def test_create_answer_composer_supports_ollama(monkeypatch) -> None:
     monkeypatch.setenv("LLM_ANSWER_PROVIDER", "ollama")
     monkeypatch.setenv("LLM_ANSWER_MODEL", "qwen2.5:3b")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from time import perf_counter
 from typing import Any, TypedDict
 
@@ -57,11 +58,24 @@ class LangGraphRAGWorkflow:
             require_llm_answer=require_llm_answer,
             default_answer_provider=default_answer_provider,
         )
+        self._on_stage: Callable[[str, object], None] | None = None
+        self._on_answer_delta: Callable[[str], None] | None = None
         self.graph = self._build_graph()
 
-    def run(self, query: str) -> WorkflowResult:
-        final_state = self.graph.invoke({"query": query, "started": perf_counter()})
-        return final_state["result"]
+    def run(
+        self,
+        query: str,
+        on_stage: Callable[[str, object], None] | None = None,
+        on_answer_delta: Callable[[str], None] | None = None,
+    ) -> WorkflowResult:
+        self._on_stage = on_stage
+        self._on_answer_delta = on_answer_delta
+        try:
+            final_state = self.graph.invoke({"query": query, "started": perf_counter()})
+            return final_state["result"]
+        finally:
+            self._on_stage = None
+            self._on_answer_delta = None
 
     def _build_graph(self) -> Any:
         try:
@@ -96,10 +110,13 @@ class LangGraphRAGWorkflow:
         return graph.compile()
 
     def _plan(self, state: LangGraphState) -> LangGraphState:
-        return {"plan": self.planner.plan(state["query"])}
+        plan = self.planner.plan(state["query"])
+        self._emit_stage("planning", plan)
+        return {"plan": plan}
 
     def _retrieve(self, state: LangGraphState) -> LangGraphState:
         sources = self.retriever.retrieve(state["query"], top_k=self.top_k)
+        self._emit_stage("retrieval", sources)
         return {
             "sources": sources,
             "evidence_sufficient": has_enough_evidence(state["query"], sources),
@@ -112,7 +129,9 @@ class LangGraphRAGWorkflow:
     def _fallback(self, state: LangGraphState) -> LangGraphState:
         sources = state.get("sources", [])
         grounding = self.judge.judge([], [])
-        answer = self.summarizer.summarize(state["query"], [], grounding, [])
+        self._emit_stage("agents", [])
+        self._emit_stage("judge", grounding)
+        answer = self.summarizer.summarize(state["query"], [], grounding, [], self._on_answer_delta)
         result = self._result(
             state=state,
             agents=[],
@@ -133,13 +152,22 @@ class LangGraphRAGWorkflow:
             ExpertAgent(agent_name).run(coordination.tasks[agent_name], coordination.sources)
             for agent_name in coordination.selected_agents
         ]
+        self._emit_stage("agents", agent_results)
         return {"agents": agent_results}
 
     def _judge(self, state: LangGraphState) -> LangGraphState:
-        return {"grounding": self.judge.judge(state["agents"], state["sources"])}
+        grounding = self.judge.judge(state["agents"], state["sources"])
+        self._emit_stage("judge", grounding)
+        return {"grounding": grounding}
 
     def _summarize(self, state: LangGraphState) -> LangGraphState:
-        answer = self.summarizer.summarize(state["query"], state["agents"], state["grounding"], state["sources"])
+        answer = self.summarizer.summarize(
+            state["query"],
+            state["agents"],
+            state["grounding"],
+            state["sources"],
+            self._on_answer_delta,
+        )
         result = self._result(
             state=state,
             agents=state["agents"],
@@ -194,3 +222,7 @@ class LangGraphRAGWorkflow:
             sources=sources,
             metrics=metrics,
         )
+
+    def _emit_stage(self, event: str, value: object) -> None:
+        if self._on_stage is not None:
+            self._on_stage(event, value)

@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from hashlib import sha256
 import json
 import os
+from queue import Queue
 import re
-from uuid import uuid4
 from pathlib import Path
-from time import sleep
-from typing import Any
+from threading import Thread
+from time import perf_counter
+from typing import Any, cast
+from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,7 +24,7 @@ from multi_agent_rag.documents import SUPPORTED_EXTENSIONS, load_document
 from multi_agent_rag.evaluation import EvalReport, run_evaluation
 from multi_agent_rag.integrations import check_integrations
 from multi_agent_rag.ingestion import DocumentIngestionService
-from multi_agent_rag.models import AgentResult, SearchResult, WorkflowResult
+from multi_agent_rag.models import AgentPlan, AgentResult, JudgeResult, SearchResult, WorkflowResult
 from multi_agent_rag.observability import metrics_registry
 from multi_agent_rag.orchestration import create_workflow
 from multi_agent_rag.persistence import ChunkRepository, DocumentRecord, DocumentRepository, DocumentStatus, MongoStore
@@ -34,8 +37,6 @@ from multi_agent_rag.retrieval.vector_index import QdrantDocumentIndex
 DEFAULT_DOCUMENT_PATH = Path("examples/sample_docs.md")
 DEFAULT_EVAL_CASES_PATH = Path("examples/eval_cases.json")
 UPLOAD_DIR = Path("output/uploads")
-STREAM_DELTA_CHARS = 120
-STREAM_DELTA_DELAY_SECONDS = 0.02
 MONGO_STORE = MongoStore()
 
 
@@ -147,37 +148,69 @@ def build_app() -> FastAPI:
 
     @app.post("/query/stream")
     def query_stream(request: QueryRequest) -> StreamingResponse:
-        result = run_query_request(request)
-        metrics_registry.record_run(result.metrics)
+        validate_query_source(request)
 
         def events():
-            yield _sse("planning", {"selected_agents": result.plan.selected_agents, "tasks": result.plan.tasks})
-            yield _sse(
-                "retrieval",
-                {
-                    "count": len(result.sources),
-                    "sources": [source_payload(source, citation_id(index)) for index, source in enumerate(result.sources)],
-                },
-            )
-            yield _sse("agents", {"agents": [agent_payload(agent) for agent in result.agents]})
-            yield _sse("judge", result.grounding.__dict__)
-            for delta in answer_deltas(result.answer):
-                yield _sse("answer_delta", {"delta": delta})
-                sleep(STREAM_DELTA_DELAY_SECONDS)
-            yield _sse("final", workflow_payload(result))
+            event_queue: Queue[Any] = Queue()
+            completed = object()
+            started = perf_counter()
+            first_delta_ms: float | None = None
 
-        return StreamingResponse(events(), media_type="text/event-stream")
+            def on_stage(event: str, value: object) -> None:
+                event_queue.put((event, stream_stage_payload(event, value)))
+
+            def on_answer_delta(delta: str) -> None:
+                nonlocal first_delta_ms
+                if first_delta_ms is None:
+                    first_delta_ms = round((perf_counter() - started) * 1000, 2)
+                event_queue.put(("answer_delta", {"delta": delta}))
+
+            def run_workflow() -> None:
+                try:
+                    result = run_query_request(request, on_stage, on_answer_delta)
+                    result.metrics["streaming_mode"] = "token" if result.metrics["answer_type"] == "llm" else "complete"
+                    result.metrics["time_to_first_token_ms"] = (
+                        first_delta_ms if first_delta_ms is not None else result.metrics["latency_ms"]
+                    )
+                    metrics_registry.record_run(result.metrics)
+                    event_queue.put(("final", workflow_payload(result)))
+                except HTTPException as exc:
+                    event_queue.put(("error", {"detail": str(exc.detail), "status_code": exc.status_code}))
+                except Exception as exc:
+                    event_queue.put(("error", {"detail": str(exc), "status_code": 500}))
+                finally:
+                    event_queue.put(completed)
+
+            Thread(target=run_workflow, daemon=True).start()
+            while True:
+                item = event_queue.get()
+                if item is completed:
+                    break
+                event, payload = item
+                yield _sse(event, payload)
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     return app
 
 
-def run_query_request(request: QueryRequest) -> WorkflowResult:
+def run_query_request(
+    request: QueryRequest,
+    on_stage: Callable[[str, object], None] | None = None,
+    on_answer_delta: Callable[[str], None] | None = None,
+) -> WorkflowResult:
     if request.document_id:
         return safe_run_document_query(
             request.query,
             request.document_id,
             request.orchestrator,
             request.require_llm_answer,
+            on_stage,
+            on_answer_delta,
         )
     return safe_run_query(
         request.query,
@@ -185,6 +218,8 @@ def run_query_request(request: QueryRequest) -> WorkflowResult:
         request.orchestrator,
         request.retrieval_backend,
         request.require_llm_answer,
+        on_stage,
+        on_answer_delta,
     )
 
 
@@ -194,6 +229,8 @@ def run_query(
     orchestrator: str | None = None,
     retrieval_backend: str | None = None,
     require_llm_answer: bool = False,
+    on_stage: Callable[[str, object], None] | None = None,
+    on_answer_delta: Callable[[str], None] | None = None,
 ) -> WorkflowResult:
     document = load_document(document_path)
     retriever = create_retriever(retrieval_backend)
@@ -204,7 +241,7 @@ def run_query(
             orchestrator=orchestrator,
             require_llm_answer=require_llm_answer,
             default_answer_provider="ollama" if require_llm_answer else None,
-        ).run(query)
+        ).run(query, on_stage, on_answer_delta)
     finally:
         close = getattr(retriever, "close", None)
         if callable(close):
@@ -216,6 +253,8 @@ def run_document_query(
     document_id: str,
     orchestrator: str | None = None,
     require_llm_answer: bool = False,
+    on_stage: Callable[[str, object], None] | None = None,
+    on_answer_delta: Callable[[str], None] | None = None,
 ) -> WorkflowResult:
     document = DocumentRepository.from_store(MONGO_STORE).get(document_id)
     if document is None:
@@ -230,7 +269,7 @@ def run_document_query(
             orchestrator=orchestrator,
             require_llm_answer=require_llm_answer,
             default_answer_provider="ollama" if require_llm_answer else None,
-        ).run(query)
+        ).run(query, on_stage, on_answer_delta)
     finally:
         close = getattr(retriever, "close", None)
         if callable(close):
@@ -327,6 +366,8 @@ def safe_run_query(
     orchestrator: str | None = None,
     retrieval_backend: str | None = None,
     require_llm_answer: bool = False,
+    on_stage: Callable[[str, object], None] | None = None,
+    on_answer_delta: Callable[[str], None] | None = None,
 ) -> WorkflowResult:
     try:
         return run_query(
@@ -335,6 +376,8 @@ def safe_run_query(
             orchestrator=orchestrator,
             retrieval_backend=retrieval_backend,
             require_llm_answer=require_llm_answer,
+            on_stage=on_stage,
+            on_answer_delta=on_answer_delta,
         )
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -345,6 +388,8 @@ def safe_run_document_query(
     document_id: str,
     orchestrator: str | None = None,
     require_llm_answer: bool = False,
+    on_stage: Callable[[str, object], None] | None = None,
+    on_answer_delta: Callable[[str], None] | None = None,
 ) -> WorkflowResult:
     try:
         return run_document_query(
@@ -352,6 +397,8 @@ def safe_run_document_query(
             document_id,
             orchestrator=orchestrator,
             require_llm_answer=require_llm_answer,
+            on_stage=on_stage,
+            on_answer_delta=on_answer_delta,
         )
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -442,19 +489,30 @@ def _sse(event: str, payload: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-def answer_deltas(answer: str, max_chars: int = STREAM_DELTA_CHARS) -> list[str]:
-    chunks = []
-    remaining = answer
-    while remaining:
-        if len(remaining) <= max_chars:
-            chunks.append(remaining)
-            break
-        split_at = remaining.rfind(" ", 0, max_chars)
-        if split_at < max_chars // 2:
-            split_at = max_chars
-        chunks.append(remaining[:split_at])
-        remaining = remaining[split_at:].lstrip()
-    return chunks
+def validate_query_source(request: QueryRequest) -> None:
+    if request.document_id:
+        return
+
+    if not Path(request.document_path).is_file():
+        raise HTTPException(status_code=400, detail=f"Document not found: {request.document_path}")
+
+
+def stream_stage_payload(event: str, value: object) -> dict[str, Any]:
+    if event == "planning":
+        plan = cast(AgentPlan, value)
+        return {"selected_agents": plan.selected_agents, "tasks": plan.tasks}
+    if event == "retrieval":
+        sources = cast(list[SearchResult], value)
+        return {
+            "count": len(sources),
+            "sources": [source_payload(source, citation_id(index)) for index, source in enumerate(sources)],
+        }
+    if event == "agents":
+        agents = cast(list[AgentResult], value)
+        return {"agents": [agent_payload(agent) for agent in agents]}
+    if event == "judge":
+        return cast(JudgeResult, value).__dict__
+    raise ValueError(f"Unsupported workflow stream event: {event}")
 
 
 app = build_app()

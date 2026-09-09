@@ -135,7 +135,7 @@ def test_query_endpoint_uses_persistent_document_id(monkeypatch) -> None:
     )
     captured: dict[str, str] = {}
 
-    def fake_document_query(query, document_id, orchestrator, require_llm_answer):
+    def fake_document_query(query, document_id, orchestrator, require_llm_answer, _on_stage, _on_answer_delta):
         captured["query"] = query
         captured["document_id"] = document_id
         return expected
@@ -313,7 +313,36 @@ def test_stream_endpoint_returns_all_events() -> None:
     assert "event: judge" in body
     assert "event: answer_delta" in body
     assert "event: final" in body
+    assert body.index("event: planning") < body.index("event: retrieval")
+    assert body.index("event: retrieval") < body.index("event: agents")
+    assert body.index("event: agents") < body.index("event: judge")
     assert body.index("event: answer_delta") < body.index("event: final")
+
+
+def test_stream_endpoint_forwards_ollama_tokens(monkeypatch) -> None:
+    def fake_stream(_self, _path, payload):
+        assert payload["stream"] is True
+        yield {"message": {"content": "RAG grounds "}, "done": False}
+        yield {"message": {"content": "answers in evidence "}, "done": False}
+        yield {"message": {"content": "[S1]."}, "done": True}
+
+    monkeypatch.setattr("multi_agent_rag.agents.summarizer.OllamaAnswerComposer._stream_json", fake_stream)
+    client = TestClient(build_app())
+
+    response = client.post(
+        "/query/stream",
+        json={"query": "How does RAG reduce hallucination?", "orchestrator": "local", "retrieval_backend": "local"},
+    )
+
+    assert response.status_code == 200
+    body = response.text
+    assert body.count("event: answer_delta") == 3
+    assert 'data: {"delta": "RAG grounds "}' in body
+    assert 'data: {"delta": "answers in evidence "}' in body
+    assert 'data: {"delta": "[S1]."}' in body
+    assert '"answer": "RAG grounds answers in evidence [S1]."' in body
+    assert '"streaming_mode": "token"' in body
+    assert '"time_to_first_token_ms":' in body
 
 
 def test_stream_endpoint_returns_bad_request_for_missing_document() -> None:

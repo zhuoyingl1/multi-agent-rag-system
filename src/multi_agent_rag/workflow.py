@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from time import perf_counter
 
 from multi_agent_rag.agents.coordinator import CoordinatorAgent
@@ -65,17 +66,25 @@ class MultiAgentRAGWorkflow:
             default_answer_provider=default_answer_provider,
         )
 
-    def run(self, query: str) -> WorkflowResult:
+    def run(
+        self,
+        query: str,
+        on_stage: Callable[[str, object], None] | None = None,
+        on_answer_delta: Callable[[str], None] | None = None,
+    ) -> WorkflowResult:
         started = perf_counter()
         plan = self.planner.plan(query)
+        _emit_stage(on_stage, "planning", plan)
         sources = self.retriever.retrieve(query, top_k=self.top_k)
+        _emit_stage(on_stage, "retrieval", sources)
         candidate_count = retriever_candidate_count(self.retriever, sources)
         reranker = retriever_reranker_name(self.retriever)
         query_intent, query_variant_count = retriever_query_metrics(self.retriever)
         selected_k, context_tokens, selection_reason = retriever_selection_metrics(self.retriever, sources)
         if not self._has_enough_evidence(query, sources):
             grounding = self.judge.judge([], [])
-            answer = self.summarizer.summarize(query, [], grounding, [])
+            _emit_stage(on_stage, "judge", grounding)
+            answer = self.summarizer.summarize(query, [], grounding, [], on_answer_delta)
             latency_ms = round((perf_counter() - started) * 1000, 2)
             metrics: dict[str, float | int | str] = {
                 "selected_agents": len(plan.selected_agents),
@@ -114,9 +123,11 @@ class MultiAgentRAGWorkflow:
         for agent_name in coordination.selected_agents:
             agent = ExpertAgent(agent_name)
             agent_results.append(agent.run(coordination.tasks[agent_name], coordination.sources))
+        _emit_stage(on_stage, "agents", agent_results)
 
         grounding = self.judge.judge(agent_results, sources)
-        answer = self.summarizer.summarize(query, agent_results, grounding, sources)
+        _emit_stage(on_stage, "judge", grounding)
+        answer = self.summarizer.summarize(query, agent_results, grounding, sources, on_answer_delta)
         latency_ms = round((perf_counter() - started) * 1000, 2)
         metrics: dict[str, float | int | str] = {
             "selected_agents": len(plan.selected_agents),
@@ -207,3 +218,8 @@ def retriever_selection_metrics(retriever: object, sources: list[SearchResult]) 
     )
     reason = str(getattr(retriever, "last_selection_reason", "fixed"))
     return selected_k, context_tokens, reason
+
+
+def _emit_stage(handler: Callable[[str, object], None] | None, event: str, value: object) -> None:
+    if handler is not None:
+        handler(event, value)

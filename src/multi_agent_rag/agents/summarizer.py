@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable, Iterator
 from typing import Any
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
@@ -29,11 +30,27 @@ class SummarizerAgent:
         self.answer_model = "template"
         self.answer_error = ""
 
-    def summarize(self, query: str, agent_results: list[AgentResult], judge: JudgeResult, sources: list[SearchResult]) -> str:
+    def summarize(
+        self,
+        query: str,
+        agent_results: list[AgentResult],
+        judge: JudgeResult,
+        sources: list[SearchResult],
+        on_answer_delta: Callable[[str], None] | None = None,
+    ) -> str:
         successful = [result for result in agent_results if not result.error]
-        return self._direct_answer(query, successful, sources)
+        answer = self._direct_answer(query, successful, sources, on_answer_delta)
+        if on_answer_delta is not None and self.answer_type != "llm":
+            on_answer_delta(answer)
+        return answer
 
-    def _direct_answer(self, query: str, agent_results: list[AgentResult], sources: list[SearchResult]) -> str:
+    def _direct_answer(
+        self,
+        query: str,
+        agent_results: list[AgentResult],
+        sources: list[SearchResult],
+        on_answer_delta: Callable[[str], None] | None,
+    ) -> str:
         if not sources and not self.answer_composer:
             if self.require_llm_answer:
                 raise RuntimeError(
@@ -46,7 +63,10 @@ class SummarizerAgent:
 
         if self.answer_composer:
             try:
-                answer = self.answer_composer.compose(query, agent_results, sources)
+                if on_answer_delta is None:
+                    answer = self.answer_composer.compose(query, agent_results, sources)
+                else:
+                    answer = self.answer_composer.compose_stream(query, agent_results, sources, on_answer_delta)
                 self.answer_type = "llm"
                 self.answer_model = self.answer_composer.model
                 self.answer_error = ""
@@ -212,6 +232,17 @@ class AnswerComposer:
     def compose(self, query: str, agent_results: list[AgentResult], sources: list[SearchResult]) -> str:
         raise NotImplementedError
 
+    def compose_stream(
+        self,
+        query: str,
+        agent_results: list[AgentResult],
+        sources: list[SearchResult],
+        on_answer_delta: Callable[[str], None],
+    ) -> str:
+        answer = self.compose(query, agent_results, sources)
+        on_answer_delta(answer)
+        return answer
+
 
 class OllamaAnswerComposer(AnswerComposer):
     """Compose answers from retrieved evidence through a local Ollama model."""
@@ -229,9 +260,40 @@ class OllamaAnswerComposer(AnswerComposer):
         self.max_tokens = max_tokens
 
     def compose(self, query: str, agent_results: list[AgentResult], sources: list[SearchResult]) -> str:
-        payload = {
+        response = self._post_json("/api/chat", self._payload(query, agent_results, sources, stream=False))
+        answer = ((response.get("message") or {}).get("content") or "").strip()
+        if not answer:
+            raise ValueError("Ollama returned an empty answer.")
+        return answer
+
+    def compose_stream(
+        self,
+        query: str,
+        agent_results: list[AgentResult],
+        sources: list[SearchResult],
+        on_answer_delta: Callable[[str], None],
+    ) -> str:
+        deltas: list[str] = []
+        for response in self._stream_json("/api/chat", self._payload(query, agent_results, sources, stream=True)):
+            delta = ((response.get("message") or {}).get("content") or "")
+            if delta:
+                deltas.append(delta)
+                on_answer_delta(delta)
+        answer = "".join(deltas).strip()
+        if not answer:
+            raise ValueError("Ollama returned an empty streamed answer.")
+        return answer
+
+    def _payload(
+        self,
+        query: str,
+        agent_results: list[AgentResult],
+        sources: list[SearchResult],
+        stream: bool,
+    ) -> dict[str, Any]:
+        return {
             "model": self.model,
-            "stream": False,
+            "stream": stream,
             "messages": [
                 {
                     "role": "system",
@@ -249,11 +311,6 @@ class OllamaAnswerComposer(AnswerComposer):
             ],
             "options": {"temperature": 0.2, "num_predict": self.max_tokens},
         }
-        response = self._post_json("/api/chat", payload)
-        answer = ((response.get("message") or {}).get("content") or "").strip()
-        if not answer:
-            raise ValueError("Ollama returned an empty answer.")
-        return answer
 
     def _prompt(self, query: str, agent_results: list[AgentResult], sources: list[SearchResult]) -> str:
         findings = "\n".join(f"- {result.agent_name}: {result.content}" for result in agent_results[:3])
@@ -276,6 +333,30 @@ class OllamaAnswerComposer(AnswerComposer):
         try:
             with urlrequest.urlopen(request, timeout=self.timeout_seconds) as response:
                 return json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Ollama request failed with HTTP {exc.code}: {detail}") from exc
+        except URLError as exc:
+            raise RuntimeError(f"Ollama is not reachable at {self.base_url}. Start Ollama and try again.") from exc
+
+    def _stream_json(self, path: str, payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
+        body = json.dumps(payload).encode("utf-8")
+        request = urlrequest.Request(
+            f"{self.base_url}{path}",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlrequest.urlopen(request, timeout=self.timeout_seconds) as response:
+                for raw_line in response:
+                    line = raw_line.decode("utf-8").strip()
+                    if not line:
+                        continue
+                    item = json.loads(line)
+                    if item.get("error"):
+                        raise RuntimeError(f"Ollama streaming failed: {item['error']}")
+                    yield item
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"Ollama request failed with HTTP {exc.code}: {detail}") from exc

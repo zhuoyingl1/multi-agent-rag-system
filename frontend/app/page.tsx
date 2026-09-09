@@ -350,6 +350,10 @@ export default function Home() {
       const payload = JSON.parse(data) as { delta: string };
       setStreamedAnswer((current) => current + payload.delta);
     }
+    if (eventName === "error" && data) {
+      const payload = JSON.parse(data) as { detail?: string };
+      throw new Error(payload.detail || "Streaming query failed");
+    }
     return false;
   }
 
