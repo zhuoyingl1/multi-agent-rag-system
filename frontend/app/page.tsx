@@ -21,6 +21,7 @@ import {
   Send,
   Trash2,
   Upload,
+  X,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
@@ -54,6 +55,15 @@ type UploadResponse = {
   status: string;
   duplicate: boolean;
   knowledge_space_id: string | null;
+};
+
+type UploadQueueItem = {
+  id: string;
+  file: File;
+  status: "queued" | "uploading" | "processing" | "completed" | "failed";
+  progress: number;
+  documentId?: string;
+  error?: string;
 };
 
 type DocumentStatusResponse = {
@@ -191,7 +201,7 @@ export default function Home() {
   const [evaluating, setEvaluating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [evaluationError, setEvaluationError] = useState<string | null>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
   const [uploading, setUploading] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
@@ -214,7 +224,8 @@ export default function Home() {
   const displayedAnswer = result?.answer ?? streamedAnswer;
   const answerMode = formatAnswerMode(result?.metrics);
   const answerWarning = formatAnswerWarning(result?.metrics);
-  const uploadDisabled = !hydrated || uploading || !selectedFile;
+  const queuedUploadCount = uploadQueue.filter((item) => item.status === "queued").length;
+  const uploadDisabled = !hydrated || uploading || queuedUploadCount === 0;
   const scopedDocuments = useMemo(
     () =>
       knowledgeSpaceId
@@ -396,8 +407,29 @@ export default function Home() {
     setError(null);
   }
 
-  async function uploadDocument() {
-    if (!selectedFile) {
+  function selectUploadFiles(files: File[]) {
+    const seen = new Set<string>();
+    const queue = files.flatMap((file) => {
+      const signature = `${file.name}-${file.size}-${file.lastModified}`;
+      if (seen.has(signature)) {
+        return [];
+      }
+      seen.add(signature);
+      return [{ id: signature, file, status: "queued" as const, progress: 0 }];
+    });
+    setUploadQueue(queue);
+    setUploadStatus(null);
+  }
+
+  function updateUploadItem(itemId: string, updates: Partial<Omit<UploadQueueItem, "id" | "file">>) {
+    setUploadQueue((current) =>
+      current.map((item) => (item.id === itemId ? { ...item, ...updates } : item)),
+    );
+  }
+
+  async function uploadDocuments() {
+    const pendingItems = uploadQueue.filter((item) => item.status === "queued");
+    if (pendingItems.length === 0) {
       return;
     }
 
@@ -409,46 +441,72 @@ export default function Home() {
     setConversationId("");
     setResult(null);
     setStreamedAnswer("");
+    let completedCount = 0;
+    let failedCount = 0;
+    let lastCompleted: UploadResponse | null = null;
+    for (const item of pendingItems) {
+      updateUploadItem(item.id, { status: "uploading", progress: 5, error: undefined });
+      setUploadStatus(`Uploading ${item.file.name}`);
+      try {
+        const body = new FormData();
+        body.append("file", item.file);
+        if (knowledgeSpaceId) {
+          body.append("knowledge_space_id", knowledgeSpaceId);
+        }
+        const response = await fetch(`${apiBaseUrl}/documents/upload`, {
+          method: "POST",
+          body,
+        });
+        if (!response.ok) {
+          throw new Error(await readErrorMessage(response, `Upload request failed with ${response.status}`));
+        }
+        const uploaded = (await response.json()) as UploadResponse;
+        updateUploadItem(item.id, { status: "processing", progress: 10, documentId: uploaded.document_id });
+        setDocumentId(uploaded.document_id);
+        setDocumentName(uploaded.filename);
+        await waitForDocument(uploaded.document_id, uploaded.filename, (status) => {
+          updateUploadItem(item.id, {
+            status: status.status === "completed" ? "completed" : "processing",
+            progress: status.progress_percentage,
+          });
+        });
+        updateUploadItem(item.id, { status: "completed", progress: 100 });
+        completedCount += 1;
+        lastCompleted = uploaded;
+      } catch (caught) {
+        failedCount += 1;
+        updateUploadItem(item.id, {
+          status: "failed",
+          error: caught instanceof Error ? caught.message : "Upload failed",
+        });
+      }
+    }
+
     try {
-      const body = new FormData();
-      body.append("file", selectedFile);
-      if (knowledgeSpaceId) {
-        body.append("knowledge_space_id", knowledgeSpaceId);
-      }
-      const response = await fetch(`${apiBaseUrl}/documents/upload`, {
-        method: "POST",
-        body,
-      });
-      if (!response.ok) {
-        throw new Error(await readErrorMessage(response, `Upload request failed with ${response.status}`));
-      }
-      const uploaded = (await response.json()) as UploadResponse;
-      setDocumentId(uploaded.document_id);
-      setDocumentName(uploaded.filename);
-      setUploadStatus(`Indexing ${uploaded.filename}`);
-      const status = await waitForDocument(uploaded.document_id, uploaded.filename);
-      setUploadStatus(
-        status.index_stale
-          ? `Index update required: ${uploaded.filename}`
-          : `Ready: ${uploaded.filename} (${status.chunk_count} chunks)`,
-      );
       await Promise.all([refreshDocuments(), refreshKnowledgeSpaces()]);
-      await loadChunkPreview(uploaded.document_id);
-    } catch (caught) {
-      setUploadStatus(null);
-      setError(caught instanceof Error ? caught.message : "Upload failed");
-      await Promise.all([refreshDocuments(), refreshKnowledgeSpaces()]);
+      if (lastCompleted) {
+        await loadChunkPreview(lastCompleted.document_id);
+      }
     } finally {
+      setUploadStatus(
+        failedCount > 0
+          ? `Completed ${completedCount} of ${pendingItems.length}; ${failedCount} failed`
+          : `Completed ${completedCount} of ${pendingItems.length} documents`,
+      );
       setUploading(false);
     }
   }
 
-  async function waitForDocument(documentId: string, filename: string): Promise<DocumentStatusResponse> {
+  async function waitForDocument(
+    documentId: string,
+    filename: string,
+    onProgress?: (status: DocumentStatusResponse) => void,
+  ): Promise<DocumentStatusResponse> {
     let status: DocumentStatusResponse;
     try {
-      status = await waitForDocumentStream(documentId, filename);
+      status = await waitForDocumentStream(documentId, filename, onProgress);
     } catch {
-      return pollDocumentStatus(documentId, filename);
+      return pollDocumentStatus(documentId, filename, onProgress);
     }
     if (status.status === "failed") {
       throw new Error(status.stage_details || "Document indexing failed");
@@ -456,7 +514,11 @@ export default function Home() {
     return status;
   }
 
-  async function waitForDocumentStream(documentId: string, filename: string): Promise<DocumentStatusResponse> {
+  async function waitForDocumentStream(
+    documentId: string,
+    filename: string,
+    onProgress?: (status: DocumentStatusResponse) => void,
+  ): Promise<DocumentStatusResponse> {
     const response = await fetch(`${apiBaseUrl}/documents/${documentId}/progress/stream`);
     if (!response.ok || !response.body) {
       throw new Error(`Document progress stream failed with ${response.status}`);
@@ -486,7 +548,7 @@ export default function Home() {
           throw new Error("detail" in payload ? payload.detail : "Document progress stream failed");
         }
         const status = payload as DocumentStatusResponse;
-        updateDocumentProgress(status, filename);
+        updateDocumentProgress(status, filename, onProgress);
         if (eventName === "failed" || status.status === "failed") {
           return status;
         }
@@ -498,14 +560,18 @@ export default function Home() {
     throw new Error("Document progress stream ended before indexing completed");
   }
 
-  async function pollDocumentStatus(documentId: string, filename: string): Promise<DocumentStatusResponse> {
+  async function pollDocumentStatus(
+    documentId: string,
+    filename: string,
+    onProgress?: (status: DocumentStatusResponse) => void,
+  ): Promise<DocumentStatusResponse> {
     for (let attempt = 0; attempt < 120; attempt += 1) {
       const response = await fetch(`${apiBaseUrl}/documents/${documentId}/progress`);
       if (!response.ok) {
         throw new Error(await readErrorMessage(response, `Document status request failed with ${response.status}`));
       }
       const status = (await response.json()) as DocumentStatusResponse;
-      updateDocumentProgress(status, filename);
+      updateDocumentProgress(status, filename, onProgress);
       if (status.status === "completed") {
         return status;
       }
@@ -517,8 +583,13 @@ export default function Home() {
     throw new Error("Document indexing timed out");
   }
 
-  function updateDocumentProgress(status: DocumentStatusResponse, filename: string) {
+  function updateDocumentProgress(
+    status: DocumentStatusResponse,
+    filename: string,
+    onProgress?: (status: DocumentStatusResponse) => void,
+  ) {
     setDocumentStatus(status);
+    onProgress?.(status);
     if (status.status === "processing") {
       setUploadStatus(`${status.current_stage || "Indexing"} ${filename}: ${status.progress_percentage}%`);
     }
@@ -863,19 +934,56 @@ export default function Home() {
             <input
               id="documentUpload"
               type="file"
+              multiple
               accept=".md,.markdown,.txt,.json,.csv,.pdf"
               onChange={(event) => {
-                setSelectedFile(event.target.files?.[0] ?? null);
-                setUploadStatus(null);
+                selectUploadFiles(Array.from(event.target.files ?? []));
+                event.currentTarget.value = "";
               }}
             />
-            <button className="secondaryButton uploadButton" type="button" onClick={uploadDocument} disabled={uploadDisabled}>
+            <button className="secondaryButton uploadButton" type="button" onClick={uploadDocuments} disabled={uploadDisabled}>
               {uploading ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
-              Upload
+              {uploading ? "Uploading" : queuedUploadCount > 0 ? `Upload ${queuedUploadCount}` : "Upload"}
             </button>
           </div>
+          {uploadQueue.length > 0 && (
+            <div className="uploadQueue" aria-label="Upload queue">
+              {uploadQueue.map((item) => (
+                <div className="uploadQueueItem" key={item.id}>
+                  <div className="uploadQueueHeader">
+                    <div>
+                      <strong>{item.file.name}</strong>
+                      <span>{formatFileSize(item.file.size)}</span>
+                    </div>
+                    <span className={`queueStatus ${item.status}`}>{item.status}</span>
+                    <button
+                      className="queueRemoveButton"
+                      type="button"
+                      onClick={() => setUploadQueue((current) => current.filter((entry) => entry.id !== item.id))}
+                      disabled={uploading}
+                      aria-label={`Remove ${item.file.name} from upload queue`}
+                      title="Remove from queue"
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
+                  <div
+                    className="progressTrack"
+                    role="progressbar"
+                    aria-label={`${item.file.name} upload progress`}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={item.progress}
+                  >
+                    <span style={{ width: `${item.progress}%` }} />
+                  </div>
+                  {item.error && <span className="uploadQueueError">{item.error}</span>}
+                </div>
+              ))}
+            </div>
+          )}
           {uploadStatus && <div className="uploadStatus">{uploadStatus}</div>}
-          {documentStatus?.status === "processing" && (
+          {reindexing && documentStatus?.status === "processing" && (
             <div
               className="progressTrack"
               role="progressbar"
@@ -1141,6 +1249,16 @@ function Metric({ label, value }: { label: string; value: string }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function formatFileSize(sizeBytes: number) {
+  if (sizeBytes < 1024) {
+    return `${sizeBytes} B`;
+  }
+  if (sizeBytes < 1024 * 1024) {
+    return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatAnswerMode(metrics: QueryResponse["metrics"] | undefined) {

@@ -657,6 +657,104 @@ textarea:focus {
   min-width: 0;
 }
 
+.uploadQueue {
+  display: grid;
+  gap: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.uploadQueueItem {
+  display: grid;
+  gap: 7px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcfb;
+}
+
+.uploadQueueHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 28px;
+  align-items: center;
+  gap: 8px;
+}
+
+.uploadQueueHeader div,
+.uploadQueueHeader strong,
+.uploadQueueHeader span {
+  min-width: 0;
+}
+
+.uploadQueueHeader strong,
+.uploadQueueHeader div > span {
+  display: block;
+}
+
+.uploadQueueHeader strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.uploadQueueHeader div > span {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.queueStatus {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.queueStatus.processing,
+.queueStatus.uploading {
+  color: var(--accent);
+}
+
+.queueStatus.completed {
+  color: var(--brand);
+}
+
+.queueStatus.failed,
+.uploadQueueError {
+  color: var(--danger);
+}
+
+.queueRemoveButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.queueRemoveButton:hover {
+  background: var(--panel-soft);
+  color: var(--danger);
+}
+
+.queueRemoveButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.uploadQueueError {
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .uploadStatus {
   min-height: 24px;
   padding: 6px 8px;
