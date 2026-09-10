@@ -376,11 +376,27 @@ class ConversationRepository:
         conversation = self.collection.find_one({"_id": conversation_id})
         return _conversation_record(conversation) if conversation else None
 
-    def list(self, *, skip: int = 0, limit: int = 100) -> list[ConversationRecord]:
+    def list(
+        self,
+        *,
+        skip: int = 0,
+        limit: int = 100,
+        document_id: str | None = None,
+        knowledge_space_id: str | None = None,
+    ) -> list[ConversationRecord]:
         if skip < 0 or not 1 <= limit <= 100:
             raise ValueError("Conversation pagination is out of range.")
-        cursor = self.collection.find({}).sort("updated_at", -1).skip(skip).limit(limit)
+        conversation_filter: dict[str, Any] = {}
+        if document_id is not None:
+            conversation_filter["document_id"] = document_id
+        if knowledge_space_id is not None:
+            conversation_filter["knowledge_space_id"] = knowledge_space_id
+        cursor = self.collection.find(conversation_filter).sort("updated_at", -1).skip(skip).limit(limit)
         return [_conversation_record(conversation) for conversation in cursor]
+
+    def delete(self, conversation_id: str) -> bool:
+        result = self.collection.delete_one({"_id": conversation_id})
+        return result.deleted_count > 0
 
     def add_message(
         self,

@@ -465,12 +465,41 @@ def build_app() -> FastAPI:
         )
         return conversation_payload(conversation)
 
+    @app.get("/conversations")
+    def list_conversations(
+        skip: int = Query(default=0, ge=0),
+        limit: int = Query(default=50, ge=1, le=100),
+        document_id: str | None = Query(default=None),
+        knowledge_space_id: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        if document_id and knowledge_space_id:
+            raise HTTPException(status_code=400, detail="Choose either document_id or knowledge_space_id, not both.")
+        repository = ConversationRepository.from_store(MONGO_STORE)
+        conversations = repository.list(
+            skip=skip,
+            limit=limit,
+            document_id=document_id,
+            knowledge_space_id=knowledge_space_id,
+        )
+        return {
+            "conversations": [conversation_summary_payload(conversation) for conversation in conversations],
+            "skip": skip,
+            "limit": limit,
+        }
+
     @app.get("/conversations/{conversation_id}")
     def get_conversation(conversation_id: str) -> dict[str, Any]:
         conversation = ConversationRepository.from_store(MONGO_STORE).get(conversation_id)
         if conversation is None:
             raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")
         return conversation_payload(conversation)
+
+    @app.delete("/conversations/{conversation_id}")
+    def delete_conversation(conversation_id: str) -> dict[str, Any]:
+        repository = ConversationRepository.from_store(MONGO_STORE)
+        if not repository.delete(conversation_id):
+            raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")
+        return {"conversation_id": conversation_id, "deleted": True}
 
     @app.post("/evaluate")
     def evaluate(request: EvaluationRequest) -> dict[str, Any]:
@@ -891,6 +920,18 @@ def conversation_payload(conversation: ConversationRecord) -> dict[str, Any]:
             }
             for message in conversation.messages
         ],
+    }
+
+
+def conversation_summary_payload(conversation: ConversationRecord) -> dict[str, Any]:
+    return {
+        "conversation_id": conversation.conversation_id,
+        "title": conversation.title,
+        "document_id": conversation.document_id,
+        "knowledge_space_id": conversation.knowledge_space_id,
+        "message_count": len(conversation.messages),
+        "created_at": conversation.created_at.isoformat(),
+        "updated_at": conversation.updated_at.isoformat(),
     }
 
 

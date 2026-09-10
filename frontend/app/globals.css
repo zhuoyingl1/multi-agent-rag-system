@@ -85,6 +85,7 @@ h2 {
 .eventPanel,
 .integrationPanel,
 .evaluationPanel,
+.conversationPanel,
 .previewPanel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -343,8 +344,149 @@ textarea:focus {
 .eventPanel,
 .integrationPanel,
 .evaluationPanel,
+.conversationPanel,
 .previewPanel {
   padding: 18px;
+}
+
+.conversationPanel {
+  grid-column: 1 / -1;
+}
+
+.conversationHeader {
+  justify-content: space-between;
+}
+
+.conversationHeader > span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.conversationLayout {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  min-height: 220px;
+  max-height: 380px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.conversationList,
+.conversationTranscript {
+  overflow-y: auto;
+}
+
+.conversationList {
+  border-right: 1px solid var(--line);
+  background: var(--panel-soft);
+}
+
+.conversationRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+}
+
+.conversationRow.active {
+  background: #ffffff;
+  box-shadow: inset 3px 0 0 var(--brand);
+}
+
+.conversationRow > button:first-child {
+  min-width: 0;
+  padding: 12px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+.conversationRow > button:first-child:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.conversationRow strong,
+.conversationRow span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversationRow strong {
+  font-size: 13px;
+}
+
+.conversationRow span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.conversationDeleteButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.conversationDeleteButton:hover {
+  color: var(--danger);
+  background: #fff6f5;
+}
+
+.conversationDeleteButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.conversationTranscript {
+  background: #fbfcfb;
+}
+
+.conversationMessage {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.conversationMessage.assistant {
+  background: #ffffff;
+}
+
+.conversationMessage > span {
+  color: var(--brand-dark);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.conversationMessage p {
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.compactEmptyState {
+  display: grid;
+  min-height: 140px;
+  place-items: center;
+  padding: 20px;
+  color: var(--muted);
+  text-align: center;
 }
 
 .previewPanel {
@@ -849,6 +991,10 @@ textarea:focus {
   .evalMetrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .conversationLayout {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 560px) {
@@ -884,6 +1030,21 @@ textarea:focus {
 
   .uploadRow {
     grid-template-columns: 1fr;
+  }
+
+  .conversationLayout {
+    grid-template-columns: 1fr;
+    max-height: none;
+  }
+
+  .conversationList {
+    max-height: 180px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .conversationTranscript {
+    max-height: 320px;
   }
 
   .spaceSelectRow {

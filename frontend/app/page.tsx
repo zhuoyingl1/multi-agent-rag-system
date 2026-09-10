@@ -10,6 +10,7 @@ import {
   FileSearch,
   FileText,
   FolderTree,
+  History,
   Loader2,
   MessageSquarePlus,
   Network,
@@ -129,8 +130,27 @@ type KnowledgeSpaceListResponse = {
 type ConversationResponse = {
   conversation_id: string;
   title: string;
-  document_id: string;
+  document_id: string | null;
   knowledge_space_id: string | null;
+  created_at: string;
+  updated_at: string;
+  messages: ConversationMessage[];
+};
+
+type ConversationMessage = {
+  message_id: string;
+  role: "user" | "assistant";
+  content: string;
+  timestamp: string;
+  metadata: Record<string, unknown>;
+};
+
+type ConversationSummary = Omit<ConversationResponse, "messages"> & {
+  message_count: number;
+};
+
+type ConversationListResponse = {
+  conversations: ConversationSummary[];
 };
 
 type HealthMetrics = {
@@ -190,6 +210,10 @@ export default function Home() {
   const [documentId, setDocumentId] = useState("");
   const [documentName, setDocumentName] = useState("");
   const [conversationId, setConversationId] = useState("");
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [conversationMessages, setConversationMessages] = useState<ConversationMessage[]>([]);
+  const [conversationLoading, setConversationLoading] = useState(false);
+  const [deletingConversationId, setDeletingConversationId] = useState("");
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [streamedAnswer, setStreamedAnswer] = useState("");
   const [metrics, setMetrics] = useState<HealthMetrics | null>(null);
@@ -255,7 +279,39 @@ export default function Home() {
   }, []);
 
   async function refreshDashboard() {
-    await Promise.all([refreshMetrics(), refreshIntegrations(), refreshDocuments(), refreshKnowledgeSpaces()]);
+    await Promise.all([
+      refreshMetrics(),
+      refreshIntegrations(),
+      refreshDocuments(),
+      refreshKnowledgeSpaces(),
+      refreshConversations(),
+    ]);
+  }
+
+  async function refreshConversations(
+    selectedDocumentId = documentId,
+    selectedKnowledgeSpaceId = knowledgeSpaceId,
+  ) {
+    if (!selectedDocumentId && !selectedKnowledgeSpaceId) {
+      setConversations([]);
+      return;
+    }
+    const params = new URLSearchParams({ limit: "50" });
+    if (selectedKnowledgeSpaceId) {
+      params.set("knowledge_space_id", selectedKnowledgeSpaceId);
+    } else {
+      params.set("document_id", selectedDocumentId);
+    }
+    try {
+      const response = await fetch(`${apiBaseUrl}/conversations?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(`Conversation list request failed with ${response.status}`);
+      }
+      const catalog = (await response.json()) as ConversationListResponse;
+      setConversations(catalog.conversations);
+    } catch {
+      setConversations([]);
+    }
   }
 
   async function refreshKnowledgeSpaces() {
@@ -348,6 +404,7 @@ export default function Home() {
       } else {
         await runStandardQuery(activeConversationId);
       }
+      await loadConversation(activeConversationId, false);
       await refreshDashboard();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Request failed");
@@ -362,6 +419,7 @@ export default function Home() {
 
   function startNewConversation() {
     setConversationId("");
+    setConversationMessages([]);
     setQuery("");
     setResult(null);
     setStreamedAnswer("");
@@ -389,7 +447,8 @@ export default function Home() {
       setKnowledgeSpaces((current) => [created, ...current]);
       setKnowledgeSpaceId(created.knowledge_space_id);
       setNewSpaceName("");
-      selectDocument("");
+      clearSelectedDocument();
+      setConversations([]);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Knowledge space creation failed");
     } finally {
@@ -399,12 +458,24 @@ export default function Home() {
 
   function selectKnowledgeSpace(selectedSpaceId: string) {
     setKnowledgeSpaceId(selectedSpaceId);
-    selectDocument("");
+    clearSelectedDocument();
     setConversationId("");
+    setConversationMessages([]);
     setResult(null);
     setStreamedAnswer("");
     setEvents([]);
     setError(null);
+    void refreshConversations("", selectedSpaceId);
+  }
+
+  function clearSelectedDocument() {
+    setDocumentId("");
+    setDocumentName("");
+    setDocumentStatus(null);
+    setUploadStatus(null);
+    setChunkPreview(null);
+    setPreviewQuery("");
+    setPreviewType("");
   }
 
   function selectUploadFiles(files: File[]) {
@@ -439,6 +510,7 @@ export default function Home() {
     setDocumentId("");
     setDocumentStatus(null);
     setConversationId("");
+    setConversationMessages([]);
     setResult(null);
     setStreamedAnswer("");
     let completedCount = 0;
@@ -602,6 +674,7 @@ export default function Home() {
     setReindexing(true);
     setError(null);
     setConversationId("");
+    setConversationMessages([]);
     setResult(null);
     setStreamedAnswer("");
     try {
@@ -630,6 +703,7 @@ export default function Home() {
     setDocumentName(selected?.filename ?? "");
     setDocumentStatus(selected);
     setConversationId("");
+    setConversationMessages([]);
     setResult(null);
     setStreamedAnswer("");
     setEvents([]);
@@ -649,6 +723,7 @@ export default function Home() {
     if (selected) {
       void loadChunkPreview(selected.document_id, 0, "", "");
     }
+    void refreshConversations(selected?.document_id ?? "", knowledgeSpaceId);
   }
 
   async function deleteDocument() {
@@ -666,6 +741,8 @@ export default function Home() {
       setDocumentName("");
       setDocumentStatus(null);
       setConversationId("");
+      setConversationMessages([]);
+      setConversations([]);
       setResult(null);
       setStreamedAnswer("");
       setEvents([]);
@@ -737,6 +814,53 @@ export default function Home() {
     const conversation = (await response.json()) as ConversationResponse;
     setConversationId(conversation.conversation_id);
     return conversation.conversation_id;
+  }
+
+  async function loadConversation(selectedConversationId: string, displayLatestAnswer = true) {
+    setConversationLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/conversations/${selectedConversationId}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, `Conversation request failed with ${response.status}`));
+      }
+      const conversation = (await response.json()) as ConversationResponse;
+      setConversationId(conversation.conversation_id);
+      setConversationMessages(conversation.messages);
+      if (displayLatestAnswer) {
+        const latestAnswer = [...conversation.messages].reverse().find((message) => message.role === "assistant");
+        setQuery("");
+        setResult(null);
+        setStreamedAnswer(latestAnswer?.content ?? "");
+        setEvents([]);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Conversation loading failed");
+    } finally {
+      setConversationLoading(false);
+    }
+  }
+
+  async function deleteConversation(selectedConversationId: string, title: string) {
+    if (!window.confirm(`Delete conversation ${title}?`)) {
+      return;
+    }
+    setDeletingConversationId(selectedConversationId);
+    setError(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/conversations/${selectedConversationId}`, { method: "DELETE" });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, `Conversation delete failed with ${response.status}`));
+      }
+      if (conversationId === selectedConversationId) {
+        startNewConversation();
+      }
+      await refreshConversations();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Conversation deletion failed");
+    } finally {
+      setDeletingConversationId("");
+    }
   }
 
   async function runStandardQuery(activeConversationId: string) {
@@ -1053,6 +1177,67 @@ export default function Home() {
           <Metric label="Runs" value={metrics?.run_count.toString() ?? "0"} />
           <Metric label="Avg latency" value={`${metrics?.average_latency_ms.toFixed(2) ?? "0.00"} ms`} />
         </div>
+
+        <section className="conversationPanel">
+          <div className="sectionHeader conversationHeader">
+            <div className="answerTitle">
+              <History size={18} />
+              <h2>Conversation History</h2>
+            </div>
+            <span>{conversations.length} conversations</span>
+          </div>
+          {conversations.length === 0 ? (
+            <div className="compactEmptyState">Completed conversations for the current scope will appear here.</div>
+          ) : (
+            <div className="conversationLayout">
+              <div className="conversationList">
+                {conversations.map((conversation) => (
+                  <div
+                    className={`conversationRow ${conversation.conversation_id === conversationId ? "active" : ""}`}
+                    key={conversation.conversation_id}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => void loadConversation(conversation.conversation_id)}
+                      disabled={conversationLoading || loading}
+                    >
+                      <strong>{conversation.title}</strong>
+                      <span>{conversation.message_count} messages</span>
+                    </button>
+                    <button
+                      className="conversationDeleteButton"
+                      type="button"
+                      onClick={() => void deleteConversation(conversation.conversation_id, conversation.title)}
+                      disabled={Boolean(deletingConversationId) || loading}
+                      aria-label={`Delete conversation ${conversation.title}`}
+                      title="Delete conversation"
+                    >
+                      {deletingConversationId === conversation.conversation_id ? (
+                        <Loader2 className="spin" size={15} />
+                      ) : (
+                        <Trash2 size={15} />
+                      )}
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="conversationTranscript">
+                {conversationLoading ? (
+                  <div className="compactEmptyState"><Loader2 className="spin" size={18} /></div>
+                ) : conversationMessages.length === 0 ? (
+                  <div className="compactEmptyState">Select a conversation to review its messages.</div>
+                ) : (
+                  conversationMessages.map((message) => (
+                    <article className={`conversationMessage ${message.role}`} key={message.message_id}>
+                      <span>{message.role === "user" ? "Question" : "Answer"}</span>
+                      <p>{message.content}</p>
+                    </article>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+        </section>
 
         <section className="previewPanel">
           <div className="sectionHeader previewHeader">

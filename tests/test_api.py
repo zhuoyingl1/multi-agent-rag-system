@@ -349,6 +349,50 @@ def test_create_conversation_scopes_it_to_knowledge_space(monkeypatch) -> None:
     )
 
 
+def test_list_conversations_returns_scoped_summaries(monkeypatch) -> None:
+    now = datetime.now(UTC)
+    conversations = MagicMock()
+    conversations.list.return_value = [
+        ConversationRecord(
+            conversation_id="conversation-id",
+            title="Document review",
+            document_id="507f1f77bcf86cd799439011",
+            messages=[ConversationMessage("message-1", "user", "Summarize this.", now)],
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    monkeypatch.setattr("multi_agent_rag.api.main.ConversationRepository.from_store", lambda _store: conversations)
+    client = TestClient(build_app())
+
+    response = client.get(
+        "/conversations?document_id=507f1f77bcf86cd799439011&skip=0&limit=20"
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["conversations"][0]["title"] == "Document review"
+    assert data["conversations"][0]["message_count"] == 1
+    conversations.list.assert_called_once_with(
+        skip=0,
+        limit=20,
+        document_id="507f1f77bcf86cd799439011",
+        knowledge_space_id=None,
+    )
+
+
+def test_delete_conversation_reports_missing_record(monkeypatch) -> None:
+    conversations = MagicMock()
+    conversations.delete.return_value = False
+    monkeypatch.setattr("multi_agent_rag.api.main.ConversationRepository.from_store", lambda _store: conversations)
+    client = TestClient(build_app())
+
+    response = client.delete("/conversations/missing-conversation")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Conversation not found: missing-conversation"
+
+
 def test_query_uses_and_persists_conversation_context(monkeypatch) -> None:
     now = datetime.now(UTC)
     expected = run_query(

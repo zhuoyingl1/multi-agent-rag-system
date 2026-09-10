@@ -247,6 +247,21 @@ def test_conversation_repository_adds_turn_atomically() -> None:
     assert [message["role"] for message in update["$push"]["messages"]["$each"]] == ["user", "assistant"]
 
 
+def test_conversation_repository_lists_scope_and_deletes() -> None:
+    collection = MagicMock()
+    collection.find.return_value = FakeCursor([])
+    collection.delete_one.return_value = SimpleNamespace(deleted_count=1)
+    repository = ConversationRepository(collection)
+
+    conversations = repository.list(document_id="document-id", limit=20)
+    deleted = repository.delete("conversation-id")
+
+    assert conversations == []
+    assert deleted is True
+    collection.find.assert_called_once_with({"document_id": "document-id"})
+    collection.delete_one.assert_called_once_with({"_id": "conversation-id"})
+
+
 def test_conversation_repository_rejects_invalid_message() -> None:
     repository = ConversationRepository(MagicMock())
 
