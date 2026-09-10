@@ -38,10 +38,13 @@ def test_load_csv_document_serializes_rows(tmp_path) -> None:
     path.write_text("metric,value\nsource coverage,0.8\nlatency,120\n", encoding="utf-8")
 
     document = load_document(path)
+    table_chunk = next(chunk for chunk in chunk_document(document) if chunk.chunk_type is ChunkType.TABLE)
 
     assert document.metadata["document_type"] == "csv"
-    assert "Row 1: metric: source coverage; value: 0.8" in document.text
-    assert "Row 2: metric: latency; value: 120" in document.text
+    assert "| metric | value |" in document.text
+    assert "| source coverage | 0.8 |" in document.text
+    assert table_chunk.metadata["row_start"] == "2"
+    assert table_chunk.metadata["row_end"] == "3"
 
 
 def test_load_document_rejects_unsupported_extension(tmp_path) -> None:
@@ -147,7 +150,8 @@ def test_load_xlsx_preserves_worksheets_rows_and_formulas(tmp_path) -> None:
     details = source.create_sheet("Details")
     details.append(["Component", "Status"])
     details.append(["Retriever", "Ready"])
-    details.append(["Total", "=COUNTA(B2:B2)"])
+    details.append([None, None])
+    details.append(["Total", "=COUNTA(B2:B4)"])
     source.save(path)
 
     document = load_document(path)
@@ -160,9 +164,14 @@ def test_load_xlsx_preserves_worksheets_rows_and_formulas(tmp_path) -> None:
     assert document.metadata["extraction_method"] == "openpyxl"
     assert "# Worksheet: Summary" in document.text
     assert "| Grounding | 0.95 |" in document.text
-    assert "| Total | =COUNTA(B2:B2) |" in document.text
+    assert "| Total | =COUNTA(B2:B4) |" in document.text
     assert {chunk.metadata.get("section") for chunk in chunks} == {"Worksheet: Summary", "Worksheet: Details"}
     assert sum(chunk.chunk_type is ChunkType.TABLE for chunk in chunks) == 2
+    table_chunks = [chunk for chunk in chunks if chunk.chunk_type is ChunkType.TABLE]
+    assert [(chunk.metadata["section"], chunk.metadata["row_start"], chunk.metadata["row_end"]) for chunk in table_chunks] == [
+        ("Worksheet: Summary", "2", "2"),
+        ("Worksheet: Details", "2", "4"),
+    ]
 
 
 def test_load_xlsx_rejects_workbooks_without_extractable_cells(tmp_path) -> None:

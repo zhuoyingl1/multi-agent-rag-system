@@ -103,3 +103,41 @@ def test_split_prose_keeps_the_original_line_range() -> None:
     assert len(chunks) > 1
     assert chunks[0].metadata["line_start"] == "1"
     assert chunks[-1].metadata["line_end"] == "3"
+
+
+def test_large_table_is_split_with_repeated_headers_and_row_ranges() -> None:
+    data_rows = [f"| Item-{index} | {'value ' * 12}{index} |" for index in range(1, 13)]
+    text = "\n".join(["| Item | Description |", "| --- | --- |", *data_rows])
+
+    chunks = StructuredChunker(max_table_chars=350).chunk(Document(title="inventory.md", text=text))
+
+    assert len(chunks) > 1
+    assert all(chunk.chunk_type is ChunkType.TABLE for chunk in chunks)
+    assert all(chunk.text.startswith("| Item | Description |\n| --- | --- |") for chunk in chunks)
+    assert all(len(chunk.text) <= 350 for chunk in chunks)
+    assert chunks[0].metadata["row_start"] == "2"
+    assert chunks[-1].metadata["row_end"] == "13"
+    combined = "\n".join(chunk.text for chunk in chunks)
+    assert all(combined.count(f"Item-{index} ") == 1 for index in range(1, 13))
+
+
+def test_generated_table_row_marker_is_not_indexed() -> None:
+    document = Document(
+        title="metrics.csv",
+        text="<!-- rag-table-rows:1,4,7 -->\n| Metric | Value |\n| --- | --- |\n| Grounding | 0.95 |\n| Latency | 120 |",
+    )
+
+    chunk = chunk_document(document)[0]
+
+    assert chunk.metadata["row_start"] == "4"
+    assert chunk.metadata["row_end"] == "7"
+    assert "rag-table-rows" not in chunk.text
+
+
+def test_invalid_table_row_marker_remains_regular_text() -> None:
+    document = Document(title="notes.md", text="<!-- rag-table-rows:invalid -->\n\nVisible content.")
+
+    chunks = chunk_document(document)
+
+    assert "rag-table-rows:invalid" in chunks[0].text
+    assert "row_start" not in chunks[0].metadata

@@ -32,6 +32,7 @@ SUPPORTED_EXTENSIONS = (
 )
 PDF_PAGE_BREAK_MARKER = "<!-- rag-page-break -->"
 PPTX_SLIDE_BREAK_MARKER = "<!-- rag-slide-break -->"
+TABLE_ROW_MARKER_PREFIX = "<!-- rag-table-rows:"
 
 
 def load_document(path: str | Path) -> Document:
@@ -119,17 +120,17 @@ def _flatten_json(value: Any, prefix: str = "") -> list[str]:
 
 def _read_csv(path: Path) -> str:
     with path.open("r", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle)
-        if reader.fieldnames:
-            rows = []
-            for index, row in enumerate(reader, start=1):
-                cells = [f"{key}: {value}" for key, value in row.items()]
-                rows.append(f"Row {index}: " + "; ".join(cells))
-            return "\n".join(rows)
-
-    with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle)
-        return "\n".join(", ".join(cell for cell in row) for row in reader)
+        rows: list[list[str]] = []
+        row_numbers: list[int] = []
+        for row_number, values in enumerate(reader, start=1):
+            row = [_escape_markdown_cell(value) for value in values]
+            while row and not row[-1]:
+                row.pop()
+            if row and any(row):
+                rows.append(row)
+                row_numbers.append(row_number)
+        return _format_markdown_table(rows, row_numbers)
 
 
 def _read_pdf(path: Path) -> tuple[str, int]:
@@ -287,15 +288,23 @@ def _format_pptx_table(table: Any) -> str:
     return _format_markdown_table(rows)
 
 
-def _format_markdown_table(rows: list[list[str]]) -> str:
-    rows = [row for row in rows if any(row)]
-    if not rows:
+def _format_markdown_table(rows: list[list[str]], row_numbers: list[int] | None = None) -> str:
+    if row_numbers is None:
+        row_numbers = list(range(1, len(rows) + 1))
+    if len(rows) != len(row_numbers):
+        raise ValueError("Table rows and row numbers must have the same length.")
+
+    populated = [(row_number, row) for row_number, row in zip(row_numbers, rows, strict=True) if any(row)]
+    if not populated:
         return ""
+    row_numbers = [row_number for row_number, _ in populated]
+    rows = [row for _, row in populated]
     width = max(len(row) for row in rows)
     normalized = [row + [""] * (width - len(row)) for row in rows]
     lines = [f"| {' | '.join(normalized[0])} |", f"| {' | '.join(['---'] * width)} |"]
     lines.extend(f"| {' | '.join(row)} |" for row in normalized[1:])
-    return "\n".join(lines)
+    marker = f"{TABLE_ROW_MARKER_PREFIX}{','.join(str(row_number) for row_number in row_numbers)} -->"
+    return f"{marker}\n" + "\n".join(lines)
 
 
 def _read_xlsx(path: Path) -> tuple[str, dict[str, str]]:
@@ -312,16 +321,18 @@ def _read_xlsx(path: Path) -> tuple[str, dict[str, str]]:
     try:
         for worksheet in workbook.worksheets:
             rows = []
-            for values in worksheet.iter_rows(values_only=True):
+            row_numbers = []
+            for row_number, values in enumerate(worksheet.iter_rows(values_only=True), start=1):
                 row = [_format_spreadsheet_value(value) for value in values]
                 while row and not row[-1]:
                     row.pop()
                 if row and any(row):
                     rows.append(row)
+                    row_numbers.append(row_number)
             if rows:
                 nonempty_worksheet_count += 1
                 populated_row_count += len(rows)
-                worksheets.append(f"# Worksheet: {worksheet.title}\n\n{_format_markdown_table(rows)}")
+                worksheets.append(f"# Worksheet: {worksheet.title}\n\n{_format_markdown_table(rows, row_numbers)}")
     finally:
         workbook.close()
 

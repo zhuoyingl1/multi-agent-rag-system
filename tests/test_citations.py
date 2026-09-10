@@ -85,3 +85,20 @@ def test_source_locator_includes_section_with_line_range() -> None:
         "line_end": 6,
         "section": "Worksheet: Summary",
     }
+
+
+def test_source_locator_prefers_section_and_table_rows() -> None:
+    locator = build_source_locator(
+        4,
+        {"section": "Worksheet: Summary", "line_start": "8", "line_end": "14", "row_start": "12", "row_end": "18"},
+    )
+
+    assert locator == {
+        "label": "Worksheet: Summary, rows 12-18",
+        "chunk_index": 4,
+        "line_start": 8,
+        "line_end": 14,
+        "row_start": 12,
+        "row_end": 18,
+        "section": "Worksheet: Summary",
+    }

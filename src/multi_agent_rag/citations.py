@@ -46,14 +46,29 @@ def build_source_locator(chunk_index: int, metadata: Mapping[str, object]) -> di
     slide_end = _optional_int(metadata.get("slide_end"))
     line_start = _optional_int(metadata.get("line_start"))
     line_end = _optional_int(metadata.get("line_end"))
+    row_start = _optional_int(metadata.get("row_start"))
+    row_end = _optional_int(metadata.get("row_end"))
     section = str(metadata.get("section") or "").strip() or None
+
+    final_row = row_end or row_start
+    rows = None
+    if row_start is not None:
+        rows = f"row {row_start}" if final_row == row_start else f"rows {row_start}-{final_row}"
 
     if slide_start is not None:
         final_slide = slide_end or slide_start
         label = f"slide {slide_start}" if final_slide == slide_start else f"slides {slide_start}-{final_slide}"
+        if rows:
+            label = f"{label}, {rows}"
     elif page_start is not None:
         final_page = page_end or page_start
         label = f"page {page_start}" if final_page == page_start else f"pages {page_start}-{final_page}"
+        if rows:
+            label = f"{label}, {rows}"
+    elif section is not None and rows:
+        label = f"{section}, {rows}"
+    elif rows:
+        label = rows
     elif section is not None and line_start is not None:
         final_line = line_end or line_start
         lines = f"line {line_start}" if final_line == line_start else f"lines {line_start}-{final_line}"
@@ -74,6 +89,8 @@ def build_source_locator(chunk_index: int, metadata: Mapping[str, object]) -> di
         ("slide_end", slide_end),
         ("line_start", line_start),
         ("line_end", line_end),
+        ("row_start", row_start),
+        ("row_end", row_end),
         ("section", section),
     ):
         if value is not None:

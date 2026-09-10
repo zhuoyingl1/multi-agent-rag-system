@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 import re
 
-from multi_agent_rag.documents import PDF_PAGE_BREAK_MARKER, PPTX_SLIDE_BREAK_MARKER
+from multi_agent_rag.documents import PDF_PAGE_BREAK_MARKER, PPTX_SLIDE_BREAK_MARKER, TABLE_ROW_MARKER_PREFIX
 from multi_agent_rag.models import Chunk, ChunkType, Document, stable_chunk_id
 
 
@@ -21,14 +21,21 @@ class LocatedBlock:
     location_start: int | None = None
     location_end: int | None = None
     section: str | None = None
+    row_numbers: tuple[int, ...] = ()
 
 
 class StructuredChunker:
     """Split documents into prose, code, formula, and table chunks."""
 
-    def __init__(self, max_prose_chars: int = 900, prose_overlap_chars: int = 220) -> None:
+    def __init__(
+        self,
+        max_prose_chars: int = 900,
+        prose_overlap_chars: int = 220,
+        max_table_chars: int = 1600,
+    ) -> None:
         self.max_prose_chars = max(200, max_prose_chars)
         self.prose_overlap_chars = min(max(0, prose_overlap_chars), self.max_prose_chars // 2)
+        self.max_table_chars = max(300, max_table_chars)
 
     def chunk(self, document: Document) -> list[Chunk]:
         document_id = document.stable_id()
@@ -53,6 +60,9 @@ class StructuredChunker:
                     metadata[f"{location_kind}_end"] = str(located.location_end or located.location_start)
                 if located.section:
                     metadata["section"] = located.section
+                if located.row_numbers:
+                    metadata["row_start"] = str(located.row_numbers[0])
+                    metadata["row_end"] = str(located.row_numbers[-1])
                 chunks.append(
                     Chunk(
                         document_id=document_id,
@@ -72,6 +82,7 @@ class StructuredChunker:
         index = 0
         location_index = 1
         section: str | None = None
+        table_row_numbers: tuple[int, ...] = ()
 
         def flush_prose() -> LocatedBlock | None:
             if not prose_buffer:
@@ -94,6 +105,21 @@ class StructuredChunker:
                 if pending:
                     yield pending
                 location_index += 1
+                index += 1
+                continue
+
+            if stripped.startswith(TABLE_ROW_MARKER_PREFIX) and stripped.endswith(" -->"):
+                values = stripped[len(TABLE_ROW_MARKER_PREFIX) : -4]
+                if not re.fullmatch(r"\d+(?:,\d+)*", values):
+                    if not prose_buffer:
+                        prose_start = index + 1
+                    prose_buffer.append(line)
+                    index += 1
+                    continue
+                pending = flush_prose()
+                if pending:
+                    yield pending
+                table_row_numbers = tuple(int(value) for value in values.split(",") if value)
                 index += 1
                 continue
 
@@ -174,7 +200,9 @@ class StructuredChunker:
                     location_index,
                     location_index,
                     section,
+                    table_row_numbers,
                 )
+                table_row_numbers = ()
                 continue
 
             if not stripped:
@@ -194,6 +222,9 @@ class StructuredChunker:
             yield pending
 
     def _split_block(self, block: LocatedBlock) -> Iterable[LocatedBlock]:
+        if block.chunk_type is ChunkType.TABLE:
+            yield from self._split_table(block)
+            return
         if block.chunk_type is not ChunkType.PROSE or len(block.text) <= self.max_prose_chars:
             yield block
             return
@@ -224,6 +255,68 @@ class StructuredChunker:
             location_start=block.location_start,
             location_end=block.location_end,
             section=block.section,
+            row_numbers=block.row_numbers,
+        )
+
+    def _split_table(self, block: LocatedBlock) -> Iterable[LocatedBlock]:
+        lines = block.text.splitlines()
+        has_header = len(lines) >= 2 and self._is_table_separator(lines[1])
+        header = lines[:2] if has_header else []
+        data_lines = lines[2:] if has_header else lines
+        expected_rows = len(data_lines) + (1 if has_header else 0)
+        row_numbers = block.row_numbers
+        if len(row_numbers) != expected_rows:
+            row_numbers = tuple(range(1, expected_rows + 1))
+        data_row_numbers = row_numbers[1:] if has_header else row_numbers
+
+        if not data_lines:
+            yield LocatedBlock(
+                block.chunk_type,
+                block.text,
+                block.line_start,
+                block.line_end,
+                block.location_start,
+                block.location_end,
+                block.section,
+                row_numbers,
+            )
+            return
+
+        start = 0
+        current: list[str] = []
+        base_length = sum(len(line) + 1 for line in header)
+        current_length = base_length
+        for offset, line in enumerate(data_lines):
+            line_length = len(line) + 1
+            if current and current_length + line_length > self.max_table_chars:
+                yield self._table_piece(block, header, current, data_row_numbers[start:offset], start)
+                start = offset
+                current = []
+                current_length = base_length
+            current.append(line)
+            current_length += line_length
+        if current:
+            yield self._table_piece(block, header, current, data_row_numbers[start:], start)
+
+    def _table_piece(
+        self,
+        block: LocatedBlock,
+        header: list[str],
+        rows: list[str],
+        row_numbers: tuple[int, ...],
+        row_offset: int,
+    ) -> LocatedBlock:
+        header_lines = len(header)
+        line_start = block.line_start + header_lines + row_offset
+        return LocatedBlock(
+            chunk_type=block.chunk_type,
+            text="\n".join([*header, *rows]),
+            line_start=line_start,
+            line_end=line_start + len(rows) - 1,
+            location_start=block.location_start,
+            location_end=block.location_end,
+            section=block.section,
+            row_numbers=row_numbers,
         )
 
     def _overlap_words(self, words: list[re.Match[str]]) -> list[re.Match[str]]:
@@ -243,6 +336,10 @@ class StructuredChunker:
             return False
         cells = [cell.strip() for cell in stripped.strip("|").split("|")]
         return len(cells) >= 2 and any(cells)
+
+    def _is_table_separator(self, line: str) -> bool:
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        return len(cells) >= 2 and all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells)
 
 
 def chunk_document(document: Document, max_prose_chars: int = 900) -> list[Chunk]:

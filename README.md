@@ -13,6 +13,7 @@ The application now supports persistent, versioned document indexing across Mong
 - Core `Document` and `Chunk` models
 - Stable document and chunk identifiers
 - Structured chunking for prose, fenced code blocks, Markdown tables, and formula blocks
+- Bounded table chunking with repeated headers and source row ranges
 - Local hybrid retrieval with keyword, vector-like, and entity expansion signals
 - Retrieval result scoring, highlights, and chunk-level deduplication
 - Deterministic planner, coordinator, expert, grounding judge, and summarizer agents
