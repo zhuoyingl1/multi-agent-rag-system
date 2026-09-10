@@ -73,3 +73,15 @@ def test_source_locator_formats_presentation_slides() -> None:
         "slide_start": 3,
         "slide_end": 5,
     }
+
+
+def test_source_locator_includes_section_with_line_range() -> None:
+    locator = build_source_locator(1, {"section": "Worksheet: Summary", "line_start": "3", "line_end": "6"})
+
+    assert locator == {
+        "label": "Worksheet: Summary, lines 3-6",
+        "chunk_index": 1,
+        "line_start": 3,
+        "line_end": 6,
+        "section": "Worksheet: Summary",
+    }

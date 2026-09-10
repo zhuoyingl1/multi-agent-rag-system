@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+from datetime import date, datetime, time
 import json
 import re
 import unicodedata
@@ -17,8 +18,15 @@ CSV_EXTENSIONS = {".csv"}
 PDF_EXTENSIONS = {".pdf"}
 WORD_EXTENSIONS = {".docx"}
 PRESENTATION_EXTENSIONS = {".pptx"}
+SPREADSHEET_EXTENSIONS = {".xlsx"}
 SUPPORTED_EXTENSIONS = (
-    TEXT_EXTENSIONS | JSON_EXTENSIONS | CSV_EXTENSIONS | PDF_EXTENSIONS | WORD_EXTENSIONS | PRESENTATION_EXTENSIONS
+    TEXT_EXTENSIONS
+    | JSON_EXTENSIONS
+    | CSV_EXTENSIONS
+    | PDF_EXTENSIONS
+    | WORD_EXTENSIONS
+    | PRESENTATION_EXTENSIONS
+    | SPREADSHEET_EXTENSIONS
 )
 PDF_PAGE_BREAK_MARKER = "<!-- rag-page-break -->"
 PPTX_SLIDE_BREAK_MARKER = "<!-- rag-slide-break -->"
@@ -51,6 +59,9 @@ def load_document(path: str | Path) -> Document:
     elif extension in PRESENTATION_EXTENSIONS:
         text, presentation_metadata = _read_pptx(document_path)
         document_type = "presentation"
+    elif extension in SPREADSHEET_EXTENSIONS:
+        text, spreadsheet_metadata = _read_xlsx(document_path)
+        document_type = "spreadsheet"
     else:
         supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
         raise ValueError(f"Unsupported document extension '{extension}'. Supported extensions: {supported}")
@@ -66,6 +77,8 @@ def load_document(path: str | Path) -> Document:
         metadata.update(word_metadata)
     elif extension in PRESENTATION_EXTENSIONS:
         metadata.update(presentation_metadata)
+    elif extension in SPREADSHEET_EXTENSIONS:
+        metadata.update(spreadsheet_metadata)
 
     return Document(
         title=document_path.name,
@@ -276,6 +289,52 @@ def _format_markdown_table(rows: list[list[str]]) -> str:
     lines = [f"| {' | '.join(normalized[0])} |", f"| {' | '.join(['---'] * width)} |"]
     lines.extend(f"| {' | '.join(row)} |" for row in normalized[1:])
     return "\n".join(lines)
+
+
+def _read_xlsx(path: Path) -> tuple[str, dict[str, str]]:
+    try:
+        from openpyxl import load_workbook
+    except ImportError as exc:
+        raise RuntimeError("XLSX ingestion requires openpyxl. Install project dependencies before loading workbooks.") from exc
+
+    workbook = load_workbook(path, read_only=True, data_only=False)
+    worksheets: list[str] = []
+    nonempty_worksheet_count = 0
+    populated_row_count = 0
+
+    try:
+        for worksheet in workbook.worksheets:
+            rows = []
+            for values in worksheet.iter_rows(values_only=True):
+                row = [_format_spreadsheet_value(value) for value in values]
+                while row and not row[-1]:
+                    row.pop()
+                if row and any(row):
+                    rows.append(row)
+            if rows:
+                nonempty_worksheet_count += 1
+                populated_row_count += len(rows)
+                worksheets.append(f"# Worksheet: {worksheet.title}\n\n{_format_markdown_table(rows)}")
+    finally:
+        workbook.close()
+
+    if not worksheets:
+        raise ValueError(f"No extractable cells found in XLSX: {path}")
+
+    return "\n\n".join(worksheets), {
+        "worksheet_count": str(len(workbook.sheetnames)),
+        "nonempty_worksheet_count": str(nonempty_worksheet_count),
+        "populated_row_count": str(populated_row_count),
+        "extraction_method": "openpyxl",
+    }
+
+
+def _format_spreadsheet_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    return _escape_markdown_cell(str(value))
 
 
 def _normalize_extracted_text(text: str) -> str:

@@ -2,6 +2,7 @@ import json
 
 import pytest
 from docx import Document as WordDocument
+from openpyxl import Workbook
 from pptx import Presentation
 from pptx.util import Inches
 
@@ -133,6 +134,42 @@ def test_load_pptx_rejects_presentations_without_extractable_text(tmp_path) -> N
     Presentation().save(path)
 
     with pytest.raises(ValueError, match="No extractable text found in PPTX"):
+        load_document(path)
+
+
+def test_load_xlsx_preserves_worksheets_rows_and_formulas(tmp_path) -> None:
+    path = tmp_path / "metrics.xlsx"
+    source = Workbook()
+    summary = source.active
+    summary.title = "Summary"
+    summary.append(["Metric", "Value"])
+    summary.append(["Grounding", 0.95])
+    details = source.create_sheet("Details")
+    details.append(["Component", "Status"])
+    details.append(["Retriever", "Ready"])
+    details.append(["Total", "=COUNTA(B2:B2)"])
+    source.save(path)
+
+    document = load_document(path)
+    chunks = chunk_document(document)
+
+    assert document.metadata["document_type"] == "spreadsheet"
+    assert document.metadata["worksheet_count"] == "2"
+    assert document.metadata["nonempty_worksheet_count"] == "2"
+    assert document.metadata["populated_row_count"] == "5"
+    assert document.metadata["extraction_method"] == "openpyxl"
+    assert "# Worksheet: Summary" in document.text
+    assert "| Grounding | 0.95 |" in document.text
+    assert "| Total | =COUNTA(B2:B2) |" in document.text
+    assert {chunk.metadata.get("section") for chunk in chunks} == {"Worksheet: Summary", "Worksheet: Details"}
+    assert sum(chunk.chunk_type is ChunkType.TABLE for chunk in chunks) == 2
+
+
+def test_load_xlsx_rejects_workbooks_without_extractable_cells(tmp_path) -> None:
+    path = tmp_path / "empty.xlsx"
+    Workbook().save(path)
+
+    with pytest.raises(ValueError, match="No extractable cells found in XLSX"):
         load_document(path)
 
 

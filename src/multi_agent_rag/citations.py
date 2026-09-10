@@ -46,6 +46,7 @@ def build_source_locator(chunk_index: int, metadata: Mapping[str, object]) -> di
     slide_end = _optional_int(metadata.get("slide_end"))
     line_start = _optional_int(metadata.get("line_start"))
     line_end = _optional_int(metadata.get("line_end"))
+    section = str(metadata.get("section") or "").strip() or None
 
     if slide_start is not None:
         final_slide = slide_end or slide_start
@@ -53,6 +54,12 @@ def build_source_locator(chunk_index: int, metadata: Mapping[str, object]) -> di
     elif page_start is not None:
         final_page = page_end or page_start
         label = f"page {page_start}" if final_page == page_start else f"pages {page_start}-{final_page}"
+    elif section is not None and line_start is not None:
+        final_line = line_end or line_start
+        lines = f"line {line_start}" if final_line == line_start else f"lines {line_start}-{final_line}"
+        label = f"{section}, {lines}"
+    elif section is not None:
+        label = f"section {section}"
     elif line_start is not None:
         final_line = line_end or line_start
         label = f"line {line_start}" if final_line == line_start else f"lines {line_start}-{final_line}"
@@ -67,6 +74,7 @@ def build_source_locator(chunk_index: int, metadata: Mapping[str, object]) -> di
         ("slide_end", slide_end),
         ("line_start", line_start),
         ("line_end", line_end),
+        ("section", section),
     ):
         if value is not None:
             locator[key] = value

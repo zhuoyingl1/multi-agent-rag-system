@@ -73,6 +73,16 @@ def test_chunk_ids_are_stable() -> None:
     assert [chunk.chunk_id for chunk in first] == [chunk.chunk_id for chunk in second]
 
 
+def test_chunk_document_tracks_markdown_sections() -> None:
+    document = Document(title="notes.md", text="# Retrieval\n\nEvidence.\n\n# Evaluation\n\nMetrics.")
+
+    chunks = chunk_document(document)
+
+    sections = list(dict.fromkeys(chunk.metadata["section"] for chunk in chunks))
+
+    assert sections == ["Retrieval", "Evaluation"]
+
+
 def test_long_prose_is_split_without_losing_words() -> None:
     text = " ".join(f"word{i}" for i in range(120))
     document = Document(title="long.txt", text=text)

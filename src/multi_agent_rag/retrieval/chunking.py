@@ -20,6 +20,7 @@ class LocatedBlock:
     line_end: int
     location_start: int | None = None
     location_end: int | None = None
+    section: str | None = None
 
 
 class StructuredChunker:
@@ -50,6 +51,8 @@ class StructuredChunker:
                 if located.location_start is not None and location_kind:
                     metadata[f"{location_kind}_start"] = str(located.location_start)
                     metadata[f"{location_kind}_end"] = str(located.location_end or located.location_start)
+                if located.section:
+                    metadata["section"] = located.section
                 chunks.append(
                     Chunk(
                         document_id=document_id,
@@ -68,6 +71,7 @@ class StructuredChunker:
         prose_start = 0
         index = 0
         location_index = 1
+        section: str | None = None
 
         def flush_prose() -> LocatedBlock | None:
             if not prose_buffer:
@@ -79,7 +83,7 @@ class StructuredChunker:
             if not value:
                 return None
             location = location_index if break_marker else None
-            return LocatedBlock(ChunkType.PROSE, value, line_start, line_end, location, location)
+            return LocatedBlock(ChunkType.PROSE, value, line_start, line_end, location, location, section)
 
         while index < len(lines):
             line = lines[index]
@@ -90,6 +94,17 @@ class StructuredChunker:
                 if pending:
                     yield pending
                 location_index += 1
+                index += 1
+                continue
+
+            heading = re.match(r"^#{1,6}\s+(.+)$", stripped)
+            if heading:
+                pending = flush_prose()
+                if pending:
+                    yield pending
+                section = heading.group(1).strip()
+                prose_start = index + 1
+                prose_buffer.append(line)
                 index += 1
                 continue
 
@@ -107,7 +122,13 @@ class StructuredChunker:
                         break
                     index += 1
                 yield LocatedBlock(
-                    ChunkType.CODE, "\n".join(code_lines).strip(), start, index, location_index, location_index
+                    ChunkType.CODE,
+                    "\n".join(code_lines).strip(),
+                    start,
+                    index,
+                    location_index,
+                    location_index,
+                    section,
                 )
                 continue
 
@@ -125,7 +146,13 @@ class StructuredChunker:
                         break
                     index += 1
                 yield LocatedBlock(
-                    ChunkType.FORMULA, "\n".join(formula_lines).strip(), start, index, location_index, location_index
+                    ChunkType.FORMULA,
+                    "\n".join(formula_lines).strip(),
+                    start,
+                    index,
+                    location_index,
+                    location_index,
+                    section,
                 )
                 continue
 
@@ -140,7 +167,13 @@ class StructuredChunker:
                     table_lines.append(lines[index])
                     index += 1
                 yield LocatedBlock(
-                    ChunkType.TABLE, "\n".join(table_lines).strip(), start, index, location_index, location_index
+                    ChunkType.TABLE,
+                    "\n".join(table_lines).strip(),
+                    start,
+                    index,
+                    location_index,
+                    location_index,
+                    section,
                 )
                 continue
 
@@ -190,6 +223,7 @@ class StructuredChunker:
             line_end=line_end,
             location_start=block.location_start,
             location_end=block.location_end,
+            section=block.section,
         )
 
     def _overlap_words(self, words: list[re.Match[str]]) -> list[re.Match[str]]:
