@@ -17,6 +17,7 @@ This guide summarizes the runnable demo paths and expected outputs for the Multi
 - Local Ollama answer composition for API and frontend natural-language answers
 - Live Ollama service and model readiness checks for web demos
 - FastAPI query, streaming, health, metrics, integration readiness, and evaluation endpoints
+- Redis/Celery document ingestion with a local background-task development mode
 - Next.js console for document queries, streaming answers, sources, metrics, integrations, and evaluation
 - Deterministic evaluation runner for local regression testing
 
@@ -26,14 +27,14 @@ From the repository root:
 
 ```powershell
 python -m pip install -e ".[dev]"
-docker compose up -d qdrant neo4j
+docker compose up -d mongodb qdrant neo4j redis
 python -m pytest -q
 ```
 
 Expected test result:
 
 ```text
-81 passed
+All tests passed
 ```
 
 The exact runtime can vary by machine.
@@ -251,10 +252,28 @@ Useful endpoints:
 - `GET /health`
 - `GET /health/metrics`
 - `GET /health/integrations`
+- `GET /health/liveness`
+- `GET /health/readiness`
+- `GET /health/task-queue`
 - `POST /documents/upload`
 - `POST /query`
 - `POST /query/stream`
 - `POST /evaluate`
+
+Use the local document task backend when running only the API:
+
+```powershell
+$env:DOCUMENT_TASK_BACKEND = "local"
+python -m uvicorn multi_agent_rag.api.main:app --reload --app-dir src
+```
+
+For durable document ingestion, start Redis and a worker before the API:
+
+```powershell
+docker compose up -d redis
+$env:DOCUMENT_TASK_BACKEND = "celery"
+python -m celery -A multi_agent_rag.celery_app:celery_app worker --loglevel=INFO --pool=solo
+```
 
 Sample `/query` request:
 

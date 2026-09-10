@@ -43,3 +43,13 @@ def test_readiness_rejects_non_positive_timeout() -> None:
         assert str(exc) == "Health probe timeout must be greater than zero."
     else:
         raise AssertionError("Expected a timeout validation error.")
+
+
+def test_readiness_supports_task_queue_probe() -> None:
+    report = check_readiness(
+        ["task_queue"],
+        probes={"task_queue": lambda _timeout: "Redis and Celery workers are ready."},
+    )
+
+    assert report.ready is True
+    assert report.dependencies[0].details == "Redis and Celery workers are ready."

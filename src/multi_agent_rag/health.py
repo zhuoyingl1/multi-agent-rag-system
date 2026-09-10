@@ -13,7 +13,7 @@ from urllib import request as urlrequest
 
 from multi_agent_rag import __version__
 
-DEFAULT_REQUIRED_SERVICES = ("mongodb", "qdrant", "neo4j", "ollama")
+DEFAULT_REQUIRED_SERVICES = ("mongodb", "qdrant", "neo4j", "ollama", "task_queue")
 Probe = Callable[[float], str]
 
 
@@ -106,6 +106,7 @@ def _default_probes() -> dict[str, Probe]:
         "qdrant": _probe_qdrant,
         "neo4j": _probe_neo4j,
         "ollama": _probe_ollama,
+        "task_queue": _probe_task_queue,
     }
 
 
@@ -155,3 +156,12 @@ def _probe_ollama(timeout: float) -> str:
     if model_name not in models:
         raise RuntimeError("Configured Ollama model is not available.")
     return f"Ollama model {model_name} is available."
+
+
+def _probe_task_queue(timeout: float) -> str:
+    from multi_agent_rag.task_queue import check_task_queue
+
+    status = check_task_queue(timeout)
+    if not status.ready:
+        raise RuntimeError(status.details)
+    return status.details

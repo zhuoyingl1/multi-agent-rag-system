@@ -25,6 +25,7 @@ from multi_agent_rag.conversation import contextualize_retrieval_query, recent_h
 from multi_agent_rag.documents import SUPPORTED_EXTENSIONS, load_document
 from multi_agent_rag.evaluation import EvalReport, run_evaluation
 from multi_agent_rag.health import check_readiness
+from multi_agent_rag.ingestion_factory import create_document_ingestion_service as build_ingestion_service
 from multi_agent_rag.integrations import check_integrations
 from multi_agent_rag.ingestion import (
     CHUNKING_VERSION,
@@ -54,9 +55,7 @@ from multi_agent_rag.retrieval.factory import (
     create_document_scope_retriever,
     create_retriever,
 )
-from multi_agent_rag.retrieval.embeddings import OllamaEmbeddingService
-from multi_agent_rag.retrieval.neo4j_adapter import Neo4jGraphAdapter
-from multi_agent_rag.retrieval.vector_index import QdrantDocumentIndex
+from multi_agent_rag.task_queue import DocumentTaskDispatchError, check_task_queue, dispatch_document_task
 
 DEFAULT_DOCUMENT_PATH = Path("examples/sample_docs.md")
 DEFAULT_EVAL_CASES_PATH = Path("examples/eval_cases.json")
@@ -243,6 +242,11 @@ def build_app() -> FastAPI:
     @app.get("/health/integrations")
     def health_integrations() -> dict[str, Any]:
         return check_integrations(probe_services=True).to_dict()
+
+    @app.get("/health/task-queue")
+    def health_task_queue() -> JSONResponse:
+        status = check_task_queue()
+        return JSONResponse(status_code=200 if status.ready else 503, content=status.to_dict())
 
     @app.post("/knowledge-spaces")
     def create_knowledge_space(request: KnowledgeSpaceCreateRequest) -> dict[str, Any]:
@@ -440,7 +444,7 @@ def build_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except DocumentBusyError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        background_tasks.add_task(service.process, document.document_id, document.file_path)
+        queue_document_processing(background_tasks, service, document)
         return document_status_payload(document).model_dump()
 
     @app.post("/documents/{document_id}/retry")
@@ -456,7 +460,7 @@ def build_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except DocumentBusyError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        background_tasks.add_task(service.process, document.document_id, document.file_path)
+        queue_document_processing(background_tasks, service, document)
         return document_status_payload(document).model_dump()
 
     @app.delete("/documents/{document_id}")
@@ -758,30 +762,7 @@ def run_knowledge_space_query(
 
 
 def create_document_ingestion_service() -> DocumentIngestionService:
-    embedder = OllamaEmbeddingService(
-        base_url=os.getenv("OLLAMA_BASE_URL") or "http://127.0.0.1:11434",
-        model_name=os.getenv("OLLAMA_EMBEDDING_MODEL") or "nomic-embed-text",
-        timeout_seconds=float(os.getenv("EMBEDDING_TIMEOUT_SECONDS") or "60"),
-    )
-    vector_index = QdrantDocumentIndex(
-        url=os.getenv("QDRANT_URL") or "http://localhost:6333",
-        collection=os.getenv("QDRANT_DOCUMENT_COLLECTION") or "document_chunks",
-        embedder=embedder,
-        batch_size=int(os.getenv("EMBEDDING_BATCH_SIZE") or "50"),
-    )
-    graph_index = Neo4jGraphAdapter(
-        uri=os.getenv("NEO4J_URI") or "bolt://localhost:7687",
-        user=os.getenv("NEO4J_USER") or "neo4j",
-        password=os.getenv("NEO4J_PASSWORD") or "password123",
-        database=os.getenv("NEO4J_DATABASE") or "neo4j",
-    )
-    return DocumentIngestionService(
-        DocumentRepository.from_store(MONGO_STORE),
-        ChunkRepository.from_store(MONGO_STORE),
-        vector_index,
-        graph_index,
-        ConversationRepository.from_store(MONGO_STORE),
-    )
+    return build_ingestion_service(MONGO_STORE)
 
 
 async def save_uploaded_document(
@@ -820,7 +801,7 @@ async def save_uploaded_document(
     if registered.duplicate:
         saved_path.unlink(missing_ok=True)
     else:
-        background_tasks.add_task(service.process, document.document_id, document.file_path)
+        queue_document_processing(background_tasks, service, document)
     return UploadResponse(
         filename=document.title,
         document_id=document.document_id,
@@ -831,6 +812,25 @@ async def save_uploaded_document(
         duplicate=registered.duplicate,
         knowledge_space_id=document.knowledge_space_id,
     )
+
+
+def queue_document_processing(
+    background_tasks: BackgroundTasks,
+    service: DocumentIngestionService,
+    document: DocumentRecord,
+) -> None:
+    """Dispatch ingestion and persist a clean failure state when submission fails."""
+
+    try:
+        dispatch_document_task(
+            background_tasks,
+            document.document_id,
+            document.file_path,
+            service.process,
+        )
+    except (DocumentTaskDispatchError, ValueError) as exc:
+        service.documents.update_status(document.document_id, DocumentStatus.FAILED, str(exc))
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 def document_status_payload(document: DocumentRecord) -> DocumentStatusResponse:

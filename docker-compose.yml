@@ -24,7 +24,15 @@ services:
     volumes:
       - neo4j_data_v526:/data
 
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data_v74:/data
+
 volumes:
   mongodb_data_v8:
   qdrant_storage_v119:
   neo4j_data_v526:
+  redis_data_v74:

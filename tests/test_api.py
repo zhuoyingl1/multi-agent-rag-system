@@ -28,6 +28,7 @@ from multi_agent_rag.persistence import (
     DocumentStatus,
     KnowledgeSpaceRecord,
 )
+from multi_agent_rag.task_queue import DocumentTaskDispatchError, TaskQueueStatus
 
 
 def fake_document(status: DocumentStatus = DocumentStatus.PROCESSING) -> DocumentRecord:
@@ -70,6 +71,20 @@ def test_health_endpoint() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "healthy"
+
+
+def test_task_queue_health_endpoint_reports_backend_status(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "multi_agent_rag.api.main.check_task_queue",
+        lambda: TaskQueueStatus("celery", "ready", "Redis and Celery workers are ready.", 1),
+    )
+    client = TestClient(build_app())
+
+    response = client.get("/health/task-queue")
+
+    assert response.status_code == 200
+    assert response.json()["backend"] == "celery"
+    assert response.json()["worker_count"] == 1
 
 
 def test_cors_allows_local_frontend() -> None:
@@ -889,6 +904,26 @@ def test_retry_endpoint_rejects_non_failed_document(monkeypatch) -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Only failed document indexing can be retried."
+
+
+def test_reindex_endpoint_marks_dispatch_failure(monkeypatch) -> None:
+    service = MagicMock()
+    service.prepare_reindex.return_value = fake_document(DocumentStatus.PROCESSING)
+    monkeypatch.setattr("multi_agent_rag.api.main.create_document_ingestion_service", lambda: service)
+    monkeypatch.setattr(
+        "multi_agent_rag.api.main.dispatch_document_task",
+        MagicMock(side_effect=DocumentTaskDispatchError("Celery dispatch failed with ConnectionError.")),
+    )
+    client = TestClient(build_app())
+
+    response = client.post("/documents/507f1f77bcf86cd799439011/reindex")
+
+    assert response.status_code == 503
+    service.documents.update_status.assert_called_once_with(
+        "507f1f77bcf86cd799439011",
+        DocumentStatus.FAILED,
+        "Celery dispatch failed with ConnectionError.",
+    )
 
 
 def test_stream_endpoint_returns_all_events() -> None:

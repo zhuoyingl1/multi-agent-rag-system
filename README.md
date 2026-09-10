@@ -4,7 +4,7 @@ A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning
 
 ## Current Status
 
-The application now supports persistent, versioned document indexing across MongoDB, Qdrant, and Neo4j, plus grounded multi-turn answers through Ollama.
+The application now supports persistent, versioned document indexing across MongoDB, Qdrant, and Neo4j, durable Redis/Celery ingestion jobs, and grounded multi-turn answers through Ollama.
 
 ## Implemented Capabilities
 
@@ -33,6 +33,7 @@ The application now supports persistent, versioned document indexing across Mong
 - FastAPI application with health, document, conversation, query, streaming, and evaluation endpoints
 - In-memory metrics registry for local observability
 - Deployment liveness and concurrent dependency readiness probes
+- Configurable local or Redis/Celery document task dispatch with live worker readiness
 - Next.js console for query, streaming, metrics, and source inspection
 - SSE workflow events with progressive answer delta rendering
 - Local evaluation runner with JSON cases and JSON report export
@@ -90,7 +91,23 @@ python -m uvicorn multi_agent_rag.api.main:app --reload --app-dir src
 ```
 
 Deployment probes are available at `GET /health/liveness` for process health and
-`GET /health/readiness` for live MongoDB, Qdrant, Neo4j, and Ollama readiness.
+`GET /health/readiness` for live MongoDB, Qdrant, Neo4j, Ollama, and task queue readiness.
+`GET /health/task-queue` reports the selected task backend and responsive worker count.
+
+The default document task backend is local so the application remains easy to run. For durable jobs, start Redis and a Celery worker, then use the same task backend setting for the API:
+
+```powershell
+docker compose up -d redis
+$env:DOCUMENT_TASK_BACKEND = "celery"
+python -m celery -A multi_agent_rag.celery_app:celery_app worker --loglevel=INFO --pool=solo
+```
+
+In a separate terminal:
+
+```powershell
+$env:DOCUMENT_TASK_BACKEND = "celery"
+python -m uvicorn multi_agent_rag.api.main:app --reload --app-dir src
+```
 
 Enable local LLM answer composition with Ollama for CLI demos:
 
