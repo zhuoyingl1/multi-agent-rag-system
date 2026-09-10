@@ -262,6 +262,29 @@ def test_conversation_repository_lists_scope_and_deletes() -> None:
     collection.delete_one.assert_called_once_with({"_id": "conversation-id"})
 
 
+def test_conversation_repository_updates_normalized_title() -> None:
+    collection = MagicMock()
+    collection.update_one.return_value = SimpleNamespace(matched_count=1)
+
+    updated = ConversationRepository(collection).update_title("conversation-id", "  Payment terms  ")
+
+    assert updated is True
+    update = collection.update_one.call_args.args[1]["$set"]
+    assert update["title"] == "Payment terms"
+    assert "updated_at" in update
+
+
+def test_conversation_repository_rejects_empty_title() -> None:
+    repository = ConversationRepository(MagicMock())
+
+    try:
+        repository.update_title("conversation-id", "   ")
+    except ValueError as exc:
+        assert str(exc) == "Conversation title must not be empty."
+    else:
+        raise AssertionError("Expected an empty conversation title to be rejected.")
+
+
 def test_conversation_repository_rejects_invalid_message() -> None:
     repository = ConversationRepository(MagicMock())
 

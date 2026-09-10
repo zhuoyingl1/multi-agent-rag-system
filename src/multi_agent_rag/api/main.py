@@ -166,6 +166,12 @@ class ConversationCreateRequest(BaseModel):
     title: str | None = Field(default=None, max_length=120)
 
 
+class ConversationUpdateRequest(BaseModel):
+    """Update user-editable conversation metadata."""
+
+    title: str = Field(min_length=1, max_length=120)
+
+
 class KnowledgeSpaceCreateRequest(BaseModel):
     """Create a named multi-document retrieval scope."""
 
@@ -500,6 +506,20 @@ def build_app() -> FastAPI:
         if not repository.delete(conversation_id):
             raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")
         return {"conversation_id": conversation_id, "deleted": True}
+
+    @app.put("/conversations/{conversation_id}")
+    def update_conversation(conversation_id: str, request: ConversationUpdateRequest) -> dict[str, Any]:
+        repository = ConversationRepository.from_store(MONGO_STORE)
+        try:
+            updated = repository.update_title(conversation_id, request.title)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not updated:
+            raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")
+        conversation = repository.get(conversation_id)
+        if conversation is None:
+            raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")
+        return conversation_summary_payload(conversation)
 
     @app.post("/evaluate")
     def evaluate(request: EvaluationRequest) -> dict[str, Any]:

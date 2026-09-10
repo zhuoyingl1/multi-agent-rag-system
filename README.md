@@ -54,7 +54,7 @@ The application now supports persistent, versioned document indexing across Mong
 - SSE document progress updates with polling fallback and failed-index retry
 - Sequential batch upload queue with per-document progress and failure isolation
 - Persistent document-scoped conversations with context-aware follow-up queries
-- Scoped conversation history with message review and conversation deletion
+- Scoped conversation history with question-based titles, message review, rename, and deletion
 - Token-level Ollama answer streaming over SSE
 - Source citations with page, line, row, section, and JSON-path locators
 

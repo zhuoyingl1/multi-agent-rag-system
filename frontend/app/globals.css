@@ -385,7 +385,7 @@ textarea:focus {
 
 .conversationRow {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 34px;
+  grid-template-columns: minmax(0, 1fr) 34px 34px;
   align-items: center;
   border-bottom: 1px solid var(--line);
 }
@@ -428,7 +428,8 @@ textarea:focus {
   font-size: 11px;
 }
 
-.conversationDeleteButton {
+.conversationActionButton,
+.conversationEditRow button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -442,14 +443,36 @@ textarea:focus {
   cursor: pointer;
 }
 
-.conversationDeleteButton:hover {
+.conversationActionButton:hover,
+.conversationEditRow button:hover {
+  color: var(--brand-dark);
+  background: var(--panel-soft);
+}
+
+.conversationActionButton.danger:hover {
   color: var(--danger);
   background: #fff6f5;
 }
 
-.conversationDeleteButton:disabled {
+.conversationActionButton:disabled,
+.conversationEditRow button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+.conversationEditRow {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px 30px;
+  align-items: center;
+  gap: 4px;
+  padding: 8px;
+}
+
+.conversationEditRow input {
+  height: 34px;
+  padding: 0 9px;
+  font-size: 13px;
 }
 
 .conversationTranscript {

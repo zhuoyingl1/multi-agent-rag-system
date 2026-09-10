@@ -4,6 +4,7 @@ import {
   Activity,
   BarChart3,
   Bot,
+  Check,
   ChevronLeft,
   ChevronRight,
   Database,
@@ -14,6 +15,7 @@ import {
   Loader2,
   MessageSquarePlus,
   Network,
+  Pencil,
   Play,
   Plus,
   Radio,
@@ -214,6 +216,9 @@ export default function Home() {
   const [conversationMessages, setConversationMessages] = useState<ConversationMessage[]>([]);
   const [conversationLoading, setConversationLoading] = useState(false);
   const [deletingConversationId, setDeletingConversationId] = useState("");
+  const [editingConversationId, setEditingConversationId] = useState("");
+  const [conversationTitleDraft, setConversationTitleDraft] = useState("");
+  const [updatingConversationId, setUpdatingConversationId] = useState("");
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [streamedAnswer, setStreamedAnswer] = useState("");
   const [metrics, setMetrics] = useState<HealthMetrics | null>(null);
@@ -794,6 +799,7 @@ export default function Home() {
     if (conversationId) {
       return conversationId;
     }
+    const title = buildConversationTitle(query);
     const response = await fetch(`${apiBaseUrl}/conversations`, {
       method: "POST",
       headers: {
@@ -803,9 +809,9 @@ export default function Home() {
         knowledgeSpaceId
           ? {
               knowledge_space_id: knowledgeSpaceId,
-              title: knowledgeSpaces.find((space) => space.knowledge_space_id === knowledgeSpaceId)?.name,
+              title,
             }
-          : { document_id: documentId, title: documentName || undefined },
+          : { document_id: documentId, title },
       ),
     });
     if (!response.ok) {
@@ -860,6 +866,42 @@ export default function Home() {
       setError(caught instanceof Error ? caught.message : "Conversation deletion failed");
     } finally {
       setDeletingConversationId("");
+    }
+  }
+
+  function editConversationTitle(conversation: ConversationSummary) {
+    setEditingConversationId(conversation.conversation_id);
+    setConversationTitleDraft(conversation.title);
+  }
+
+  async function updateConversationTitle(selectedConversationId: string) {
+    const title = conversationTitleDraft.trim();
+    if (!title) {
+      return;
+    }
+    setUpdatingConversationId(selectedConversationId);
+    setError(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/conversations/${selectedConversationId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, `Conversation update failed with ${response.status}`));
+      }
+      const updated = (await response.json()) as ConversationSummary;
+      setConversations((current) =>
+        current.map((conversation) =>
+          conversation.conversation_id === selectedConversationId ? updated : conversation,
+        ),
+      );
+      setEditingConversationId("");
+      setConversationTitleDraft("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Conversation update failed");
+    } finally {
+      setUpdatingConversationId("");
     }
   }
 
@@ -1196,28 +1238,74 @@ export default function Home() {
                     className={`conversationRow ${conversation.conversation_id === conversationId ? "active" : ""}`}
                     key={conversation.conversation_id}
                   >
-                    <button
-                      type="button"
-                      onClick={() => void loadConversation(conversation.conversation_id)}
-                      disabled={conversationLoading || loading}
-                    >
-                      <strong>{conversation.title}</strong>
-                      <span>{conversation.message_count} messages</span>
-                    </button>
-                    <button
-                      className="conversationDeleteButton"
-                      type="button"
-                      onClick={() => void deleteConversation(conversation.conversation_id, conversation.title)}
-                      disabled={Boolean(deletingConversationId) || loading}
-                      aria-label={`Delete conversation ${conversation.title}`}
-                      title="Delete conversation"
-                    >
-                      {deletingConversationId === conversation.conversation_id ? (
-                        <Loader2 className="spin" size={15} />
-                      ) : (
-                        <Trash2 size={15} />
-                      )}
-                    </button>
+                    {editingConversationId === conversation.conversation_id ? (
+                      <form
+                        className="conversationEditRow"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void updateConversationTitle(conversation.conversation_id);
+                        }}
+                      >
+                        <input
+                          autoFocus
+                          value={conversationTitleDraft}
+                          onChange={(event) => setConversationTitleDraft(event.target.value)}
+                          maxLength={120}
+                          aria-label="Conversation title"
+                        />
+                        <button
+                          type="submit"
+                          disabled={!conversationTitleDraft.trim() || Boolean(updatingConversationId)}
+                          aria-label="Save conversation title"
+                          title="Save title"
+                        >
+                          {updatingConversationId ? <Loader2 className="spin" size={15} /> : <Check size={15} />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingConversationId("")}
+                          aria-label="Cancel conversation rename"
+                          title="Cancel"
+                        >
+                          <X size={15} />
+                        </button>
+                      </form>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => void loadConversation(conversation.conversation_id)}
+                          disabled={conversationLoading || loading}
+                        >
+                          <strong>{conversation.title}</strong>
+                          <span>{conversation.message_count} messages</span>
+                        </button>
+                        <button
+                          className="conversationActionButton"
+                          type="button"
+                          onClick={() => editConversationTitle(conversation)}
+                          disabled={Boolean(deletingConversationId) || loading}
+                          aria-label={`Rename conversation ${conversation.title}`}
+                          title="Rename conversation"
+                        >
+                          <Pencil size={15} />
+                        </button>
+                        <button
+                          className="conversationActionButton danger"
+                          type="button"
+                          onClick={() => void deleteConversation(conversation.conversation_id, conversation.title)}
+                          disabled={Boolean(deletingConversationId) || loading}
+                          aria-label={`Delete conversation ${conversation.title}`}
+                          title="Delete conversation"
+                        >
+                          {deletingConversationId === conversation.conversation_id ? (
+                            <Loader2 className="spin" size={15} />
+                          ) : (
+                            <Trash2 size={15} />
+                          )}
+                        </button>
+                      </>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1444,6 +1532,11 @@ function formatFileSize(sizeBytes: number) {
     return `${(sizeBytes / 1024).toFixed(1)} KB`;
   }
   return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function buildConversationTitle(question: string) {
+  const normalized = question.replace(/\s+/g, " ").trim();
+  return normalized.length > 72 ? `${normalized.slice(0, 69)}...` : normalized;
 }
 
 function formatAnswerMode(metrics: QueryResponse["metrics"] | undefined) {

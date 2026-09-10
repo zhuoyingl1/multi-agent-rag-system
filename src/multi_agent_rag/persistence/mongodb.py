@@ -398,6 +398,16 @@ class ConversationRepository:
         result = self.collection.delete_one({"_id": conversation_id})
         return result.deleted_count > 0
 
+    def update_title(self, conversation_id: str, title: str) -> bool:
+        normalized_title = title.strip()
+        if not normalized_title:
+            raise ValueError("Conversation title must not be empty.")
+        result = self.collection.update_one(
+            {"_id": conversation_id},
+            {"$set": {"title": normalized_title, "updated_at": utc_now()}},
+        )
+        return result.matched_count > 0
+
     def add_message(
         self,
         conversation_id: str,

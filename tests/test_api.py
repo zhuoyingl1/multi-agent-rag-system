@@ -393,6 +393,40 @@ def test_delete_conversation_reports_missing_record(monkeypatch) -> None:
     assert response.json()["detail"] == "Conversation not found: missing-conversation"
 
 
+def test_update_conversation_renames_existing_record(monkeypatch) -> None:
+    now = datetime.now(UTC)
+    conversations = MagicMock()
+    conversations.update_title.return_value = True
+    conversations.get.return_value = ConversationRecord(
+        conversation_id="conversation-id",
+        title="Payment terms",
+        document_id="507f1f77bcf86cd799439011",
+        messages=[],
+        created_at=now,
+        updated_at=now,
+    )
+    monkeypatch.setattr("multi_agent_rag.api.main.ConversationRepository.from_store", lambda _store: conversations)
+    client = TestClient(build_app())
+
+    response = client.put("/conversations/conversation-id", json={"title": "Payment terms"})
+
+    assert response.status_code == 200
+    assert response.json()["title"] == "Payment terms"
+    conversations.update_title.assert_called_once_with("conversation-id", "Payment terms")
+
+
+def test_update_conversation_rejects_blank_title(monkeypatch) -> None:
+    conversations = MagicMock()
+    conversations.update_title.side_effect = ValueError("Conversation title must not be empty.")
+    monkeypatch.setattr("multi_agent_rag.api.main.ConversationRepository.from_store", lambda _store: conversations)
+    client = TestClient(build_app())
+
+    response = client.put("/conversations/conversation-id", json={"title": "   "})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Conversation title must not be empty."
+
+
 def test_query_uses_and_persists_conversation_context(monkeypatch) -> None:
     now = datetime.now(UTC)
     expected = run_query(
