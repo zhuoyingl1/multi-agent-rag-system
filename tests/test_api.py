@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from docx import Document as WordDocument
 
 from multi_agent_rag.api.main import build_app, run_query
+from multi_agent_rag.health import DependencyStatus, ReadinessReport
 from multi_agent_rag.ingestion import (
     CHUNKING_VERSION,
     INDEX_VERSION,
@@ -958,6 +959,52 @@ def test_metrics_endpoint_updates_after_query() -> None:
 
     assert response.status_code == 200
     assert response.json()["run_count"] >= 1
+
+
+def test_liveness_endpoint_does_not_probe_dependencies() -> None:
+    client = TestClient(build_app())
+
+    response = client.get("/health/liveness")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "alive"}
+
+
+def test_readiness_endpoint_returns_service_unavailable(monkeypatch) -> None:
+    report = ReadinessReport(
+        status="not_ready",
+        version="0.1.0",
+        checked_at="2026-09-11T00:00:00+00:00",
+        duration_ms=4.2,
+        required_services=["mongodb"],
+        dependencies=[DependencyStatus("mongodb", "unavailable", 4.1, "Probe failed with TimeoutError.")],
+    )
+    monkeypatch.setattr("multi_agent_rag.api.main.check_readiness", lambda: report)
+    client = TestClient(build_app())
+
+    response = client.get("/health/readiness")
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "not_ready"
+    assert response.json()["dependencies"][0]["name"] == "mongodb"
+
+
+def test_readiness_endpoint_returns_ok_when_dependencies_are_ready(monkeypatch) -> None:
+    report = ReadinessReport(
+        status="ready",
+        version="0.1.0",
+        checked_at="2026-09-11T00:00:00+00:00",
+        duration_ms=2.1,
+        required_services=["mongodb"],
+        dependencies=[DependencyStatus("mongodb", "ready", 2.0, "MongoDB ping succeeded.")],
+    )
+    monkeypatch.setattr("multi_agent_rag.api.main.check_readiness", lambda: report)
+    client = TestClient(build_app())
+
+    response = client.get("/health/readiness")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
 
 
 def test_integrations_endpoint_returns_readiness(monkeypatch) -> None:

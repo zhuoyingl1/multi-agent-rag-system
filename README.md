@@ -32,6 +32,7 @@ The application now supports persistent, versioned document indexing across Mong
 - Direct answer formatting for project-style and evidence-backed questions
 - FastAPI application with health, document, conversation, query, streaming, and evaluation endpoints
 - In-memory metrics registry for local observability
+- Deployment liveness and concurrent dependency readiness probes
 - Next.js console for query, streaming, metrics, and source inspection
 - SSE workflow events with progressive answer delta rendering
 - Local evaluation runner with JSON cases and JSON report export
@@ -87,6 +88,9 @@ python -m multi_agent_rag retrieval-eval --retrieval-backend local --output outp
 python -m multi_agent_rag integrations
 python -m uvicorn multi_agent_rag.api.main:app --reload --app-dir src
 ```
+
+Deployment probes are available at `GET /health/liveness` for process health and
+`GET /health/readiness` for live MongoDB, Qdrant, Neo4j, and Ollama readiness.
 
 Enable local LLM answer composition with Ollama for CLI demos:
 

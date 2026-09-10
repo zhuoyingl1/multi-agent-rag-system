@@ -17,13 +17,14 @@ from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from multi_agent_rag.citations import build_citation_diagnostics, build_source_locator, citation_id, source_locator
 from multi_agent_rag.conversation import contextualize_retrieval_query, recent_history
 from multi_agent_rag.documents import SUPPORTED_EXTENSIONS, load_document
 from multi_agent_rag.evaluation import EvalReport, run_evaluation
+from multi_agent_rag.health import check_readiness
 from multi_agent_rag.integrations import check_integrations
 from multi_agent_rag.ingestion import (
     CHUNKING_VERSION,
@@ -512,6 +513,15 @@ def build_app() -> FastAPI:
             "skip": skip,
             "limit": limit,
         }
+
+    @app.get("/health/liveness")
+    def health_liveness() -> dict[str, str]:
+        return {"status": "alive"}
+
+    @app.get("/health/readiness")
+    def health_readiness() -> JSONResponse:
+        report = check_readiness()
+        return JSONResponse(status_code=200 if report.ready else 503, content=report.to_dict())
 
     @app.get("/conversations/{conversation_id}")
     def get_conversation(conversation_id: str) -> dict[str, Any]:
