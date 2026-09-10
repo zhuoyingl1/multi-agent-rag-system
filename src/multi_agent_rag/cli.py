@@ -15,6 +15,7 @@ from multi_agent_rag.orchestration import create_workflow
 from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.factory import create_retriever
 from multi_agent_rag.retrieval.neo4j_adapter import Neo4jGraphAdapter
+from multi_agent_rag.retrieval_evaluation import run_retrieval_evaluation
 
 
 def configure_output() -> None:
@@ -44,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ingest_parser = subparsers.add_parser("ingest", help="Load and chunk a local supported document.")
     ingest_parser.add_argument("document", help="Path to a local supported document.")
+    ingest_parser.add_argument("--show-chunks", action="store_true", help="Print indexed chunk numbers and previews.")
     ingest_parser.set_defaults(func=run_ingest)
 
     eval_parser = subparsers.add_parser("eval", help="Run deterministic local evaluation cases.")
@@ -53,6 +55,26 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--orchestrator", choices=["auto", "local", "langgraph"], default="auto", help="Workflow orchestration backend.")
     eval_parser.add_argument("--retrieval-backend", choices=["local", "qdrant"], default=None, help="Retrieval backend.")
     eval_parser.set_defaults(func=run_eval)
+
+    retrieval_eval_parser = subparsers.add_parser(
+        "retrieval-eval",
+        help="Evaluate ranked retrieval results against expected document chunks.",
+    )
+    retrieval_eval_parser.add_argument("--document", default="examples/sample_docs.md", help="Document to index for evaluation.")
+    retrieval_eval_parser.add_argument(
+        "--cases",
+        default="examples/retrieval_eval_cases.json",
+        help="Path to retrieval evaluation cases JSON.",
+    )
+    retrieval_eval_parser.add_argument("--top-k", type=int, default=5, help="Number of ranked chunks to evaluate.")
+    retrieval_eval_parser.add_argument("--output", help="Optional path for the JSON retrieval report.")
+    retrieval_eval_parser.add_argument(
+        "--retrieval-backend",
+        choices=["local", "qdrant"],
+        default=None,
+        help="Retrieval backend.",
+    )
+    retrieval_eval_parser.set_defaults(func=run_retrieval_eval)
 
     integrations_parser = subparsers.add_parser("integrations", help="Show optional production integration readiness.")
     integrations_parser.add_argument("--json", action="store_true", help="Print the readiness report as JSON.")
@@ -115,6 +137,12 @@ def run_ingest(args: argparse.Namespace) -> int:
     print(f"Chunks: {len(chunks)}")
     for chunk_type, count in sorted(counts.items()):
         print(f"- {chunk_type}: {count}")
+    if args.show_chunks:
+        print("Chunk previews:")
+        for chunk in chunks:
+            compact = " ".join(chunk.text.split())
+            preview = compact if len(compact) <= 160 else compact[:157] + "..."
+            print(f"- [{chunk.index}] {chunk.chunk_type.value}: {preview}")
     return 0
 
 
@@ -146,6 +174,45 @@ def run_eval(args: argparse.Namespace) -> int:
             print(f"  missing_expected_terms: {', '.join(case.missing_expected_terms)}")
         if case.missing_source_terms:
             print(f"  missing_source_terms: {', '.join(case.missing_source_terms)}")
+
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(report.to_json() + "\n", encoding="utf-8")
+        print(f"JSON report written to {output_path}")
+    return 0
+
+
+def run_retrieval_eval(args: argparse.Namespace) -> int:
+    report = run_retrieval_evaluation(
+        Path(args.document),
+        Path(args.cases),
+        retrieval_backend=args.retrieval_backend,
+        top_k=args.top_k,
+    )
+    print("Retrieval evaluation report:")
+    print(f"- document: {report.document_path}")
+    print(f"- backend: {report.retrieval_backend}")
+    print(f"- top_k: {report.top_k}")
+    print(f"- document_chunks: {report.document_chunk_count}")
+    print(f"- cases: {report.case_count}")
+    print(f"- passed: {report.passed_count}")
+    print(f"- failed: {report.failed_count}")
+    print(f"- pass_rate: {report.pass_rate}")
+    print(f"- average_recall_at_k: {report.average_recall_at_k}")
+    print(f"- average_precision_at_k: {report.average_precision_at_k}")
+    print(f"- mean_reciprocal_rank: {report.mean_reciprocal_rank}")
+    print(f"- average_ndcg_at_k: {report.average_ndcg_at_k}")
+    print(f"- average_latency_ms: {report.average_latency_ms}")
+    print("Cases:")
+    for case in report.cases:
+        status = "PASS" if case.passed else "FAIL"
+        ranks = ",".join(str(rank) for rank in case.relevant_ranks) or "none"
+        print(
+            f"- {case.case_id}: {status} recall={case.recall_at_k} precision={case.precision_at_k} "
+            f"mrr={case.reciprocal_rank} ndcg={case.ndcg_at_k} relevant_ranks={ranks} "
+            f"latency_ms={case.latency_ms}"
+        )
 
     if args.output:
         output_path = Path(args.output)

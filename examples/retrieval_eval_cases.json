@@ -1,0 +1,22 @@
+{
+  "cases": [
+    {
+      "case_id": "rag_grounding_retrieval",
+      "query": "How does RAG reduce hallucination?",
+      "relevant_chunk_indices": [1],
+      "min_recall_at_k": 1.0
+    },
+    {
+      "case_id": "hybrid_retrieval_components",
+      "query": "How do keyword search, vector retrieval, Neo4j, and Qdrant support retrieval?",
+      "relevant_chunk_indices": [3],
+      "min_recall_at_k": 1.0
+    },
+    {
+      "case_id": "quality_monitoring_metrics",
+      "query": "How do source coverage, latency, and error rate monitor answer quality and operations?",
+      "relevant_chunk_indices": [5, 7],
+      "min_recall_at_k": 1.0
+    }
+  ]
+}

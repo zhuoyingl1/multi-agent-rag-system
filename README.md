@@ -35,6 +35,7 @@ The application now supports persistent, versioned document indexing across Mong
 - Next.js console for query, streaming, metrics, and source inspection
 - SSE workflow events with progressive answer delta rendering
 - Local evaluation runner with JSON cases and JSON report export
+- Rank-based retrieval evaluation with Recall@K, Precision@K, MRR, nDCG@K, and latency metrics
 - Evidence sufficiency gate with grounded fallback responses
 - Production integration readiness checks for LangGraph, Qdrant, Neo4j, and reranking
 - FastAPI and frontend integration readiness dashboard
@@ -79,8 +80,10 @@ python -m pytest -q
 python -m multi_agent_rag --help
 python -m multi_agent_rag plan
 python -m multi_agent_rag ingest examples/sample_docs.md
+python -m multi_agent_rag ingest examples/sample_docs.md --show-chunks
 python -m multi_agent_rag ask "How does RAG reduce hallucination?"
 python -m multi_agent_rag eval --output output/eval-report.json
+python -m multi_agent_rag retrieval-eval --retrieval-backend local --output output/retrieval-eval-report.json
 python -m multi_agent_rag integrations
 python -m uvicorn multi_agent_rag.api.main:app --reload --app-dir src
 ```

@@ -18,3 +18,15 @@ def test_cli_plan(capsys) -> None:
     assert exit_code == 0
     assert "Implementation plan:" in output
     assert "Multi-agent workflow" in output
+
+
+def test_cli_ingest_can_show_chunk_previews(tmp_path, capsys) -> None:
+    document = tmp_path / "notes.md"
+    document.write_text("# Notes\n\nGrounded evidence.", encoding="utf-8")
+
+    exit_code = main(["ingest", str(document), "--show-chunks"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Chunk previews:" in output
+    assert "[0] prose: # Notes" in output
