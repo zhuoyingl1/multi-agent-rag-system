@@ -23,6 +23,7 @@ The application now supports persistent, versioned document indexing across Mong
 - PPTX structure preservation for slide titles, text, tables, and slide-level citations
 - XLSX structure preservation for worksheets, tabular rows, formulas, and section-aware citations
 - HTML structure preservation for headings, prose, lists, code blocks, tables, and visible-content filtering
+- Leaf-level JSON chunking with exact object and array path citations
 - PDF text cleanup for common extraction artifacts such as private-use bullets and replacement characters
 - Shared text normalization for Unicode artifacts, ligatures, private-use characters, control characters, and noisy PDF line wrapping
 - Local `ingest` command for document loading and chunking inspection

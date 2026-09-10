@@ -19,7 +19,7 @@ from multi_agent_rag.retrieval.neo4j_adapter import Neo4jGraphAdapter
 from multi_agent_rag.retrieval.vector_index import QdrantDocumentIndex
 
 INDEX_VERSION = "1"
-CHUNKING_VERSION = "structured-v2"
+CHUNKING_VERSION = "structured-v3"
 
 
 class DocumentBusyError(RuntimeError):

@@ -49,6 +49,7 @@ def build_source_locator(chunk_index: int, metadata: Mapping[str, object]) -> di
     row_start = _optional_int(metadata.get("row_start"))
     row_end = _optional_int(metadata.get("row_end"))
     section = str(metadata.get("section") or "").strip() or None
+    json_path = str(metadata.get("json_path") or "").strip() or None
 
     final_row = row_end or row_start
     rows = None
@@ -69,6 +70,8 @@ def build_source_locator(chunk_index: int, metadata: Mapping[str, object]) -> di
         label = f"{section}, {rows}"
     elif rows:
         label = rows
+    elif json_path is not None:
+        label = f"JSON path {json_path}"
     elif section is not None and line_start is not None:
         final_line = line_end or line_start
         lines = f"line {line_start}" if final_line == line_start else f"lines {line_start}-{final_line}"
@@ -92,6 +95,7 @@ def build_source_locator(chunk_index: int, metadata: Mapping[str, object]) -> di
         ("row_start", row_start),
         ("row_end", row_end),
         ("section", section),
+        ("json_path", json_path),
     ):
         if value is not None:
             locator[key] = value

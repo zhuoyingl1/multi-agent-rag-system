@@ -24,13 +24,24 @@ def test_load_markdown_document(tmp_path) -> None:
 
 def test_load_json_document_flattens_values(tmp_path) -> None:
     path = tmp_path / "metrics.json"
-    path.write_text(json.dumps({"metrics": {"grounding": 0.9}, "tags": ["rag", "judge"]}), encoding="utf-8")
+    path.write_text(
+        json.dumps({"metrics": {"grounding": 0.9}, "projects": [{"name": "RAG"}], "tags": ["rag", "judge"]}),
+        encoding="utf-8",
+    )
 
     document = load_document(path)
+    chunks = chunk_document(document)
 
     assert document.metadata["document_type"] == "json"
     assert "metrics.grounding: 0.9" in document.text
     assert "tags[1]: judge" in document.text
+    assert [chunk.metadata["json_path"] for chunk in chunks] == [
+        "metrics.grounding",
+        "projects[0].name",
+        "tags[0]",
+        "tags[1]",
+    ]
+    assert all("rag-json-path" not in chunk.text for chunk in chunks)
 
 
 def test_load_csv_document_serializes_rows(tmp_path) -> None:

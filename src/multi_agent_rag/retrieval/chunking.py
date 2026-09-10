@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import binascii
+from base64 import urlsafe_b64decode
 from collections.abc import Iterable
 from dataclasses import dataclass
 import re
 
-from multi_agent_rag.documents import PDF_PAGE_BREAK_MARKER, PPTX_SLIDE_BREAK_MARKER, TABLE_ROW_MARKER_PREFIX
+from multi_agent_rag.documents import (
+    JSON_PATH_MARKER_PREFIX,
+    PDF_PAGE_BREAK_MARKER,
+    PPTX_SLIDE_BREAK_MARKER,
+    TABLE_ROW_MARKER_PREFIX,
+)
 from multi_agent_rag.models import Chunk, ChunkType, Document, stable_chunk_id
 
 
@@ -22,6 +29,7 @@ class LocatedBlock:
     location_end: int | None = None
     section: str | None = None
     row_numbers: tuple[int, ...] = ()
+    json_path: str | None = None
 
 
 class StructuredChunker:
@@ -63,6 +71,8 @@ class StructuredChunker:
                 if located.row_numbers:
                     metadata["row_start"] = str(located.row_numbers[0])
                     metadata["row_end"] = str(located.row_numbers[-1])
+                if located.json_path:
+                    metadata["json_path"] = located.json_path
                 chunks.append(
                     Chunk(
                         document_id=document_id,
@@ -83,6 +93,7 @@ class StructuredChunker:
         location_index = 1
         section: str | None = None
         table_row_numbers: tuple[int, ...] = ()
+        json_path: str | None = None
 
         def flush_prose() -> LocatedBlock | None:
             if not prose_buffer:
@@ -94,7 +105,16 @@ class StructuredChunker:
             if not value:
                 return None
             location = location_index if break_marker else None
-            return LocatedBlock(ChunkType.PROSE, value, line_start, line_end, location, location, section)
+            return LocatedBlock(
+                ChunkType.PROSE,
+                value,
+                line_start,
+                line_end,
+                location,
+                location,
+                section,
+                json_path=json_path,
+            )
 
         while index < len(lines):
             line = lines[index]
@@ -105,6 +125,22 @@ class StructuredChunker:
                 if pending:
                     yield pending
                 location_index += 1
+                index += 1
+                continue
+
+            if stripped.startswith(JSON_PATH_MARKER_PREFIX) and stripped.endswith(" -->"):
+                encoded_path = stripped[len(JSON_PATH_MARKER_PREFIX) : -4]
+                decoded_path = self._decode_json_path(encoded_path)
+                if decoded_path is None:
+                    if not prose_buffer:
+                        prose_start = index + 1
+                    prose_buffer.append(line)
+                    index += 1
+                    continue
+                pending = flush_prose()
+                if pending:
+                    yield pending
+                json_path = decoded_path
                 index += 1
                 continue
 
@@ -155,6 +191,7 @@ class StructuredChunker:
                     location_index,
                     location_index,
                     section,
+                    json_path=json_path,
                 )
                 continue
 
@@ -179,6 +216,7 @@ class StructuredChunker:
                     location_index,
                     location_index,
                     section,
+                    json_path=json_path,
                 )
                 continue
 
@@ -201,6 +239,7 @@ class StructuredChunker:
                     location_index,
                     section,
                     table_row_numbers,
+                    json_path,
                 )
                 table_row_numbers = ()
                 continue
@@ -256,6 +295,7 @@ class StructuredChunker:
             location_end=block.location_end,
             section=block.section,
             row_numbers=block.row_numbers,
+            json_path=block.json_path,
         )
 
     def _split_table(self, block: LocatedBlock) -> Iterable[LocatedBlock]:
@@ -279,6 +319,7 @@ class StructuredChunker:
                 block.location_end,
                 block.section,
                 row_numbers,
+                block.json_path,
             )
             return
 
@@ -317,7 +358,16 @@ class StructuredChunker:
             location_end=block.location_end,
             section=block.section,
             row_numbers=row_numbers,
+            json_path=block.json_path,
         )
+
+    def _decode_json_path(self, value: str) -> str | None:
+        try:
+            padding = "=" * (-len(value) % 4)
+            decoded = urlsafe_b64decode(value + padding).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError, ValueError):
+            return None
+        return decoded or None
 
     def _overlap_words(self, words: list[re.Match[str]]) -> list[re.Match[str]]:
         selected: list[re.Match[str]] = []

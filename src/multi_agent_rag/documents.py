@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from base64 import urlsafe_b64encode
 import csv
 from datetime import date, datetime, time
 import json
@@ -33,6 +34,7 @@ SUPPORTED_EXTENSIONS = (
 PDF_PAGE_BREAK_MARKER = "<!-- rag-page-break -->"
 PPTX_SLIDE_BREAK_MARKER = "<!-- rag-slide-break -->"
 TABLE_ROW_MARKER_PREFIX = "<!-- rag-table-rows:"
+JSON_PATH_MARKER_PREFIX = "<!-- rag-json-path:"
 
 
 def load_document(path: str | Path) -> Document:
@@ -115,7 +117,8 @@ def _flatten_json(value: Any, prefix: str = "") -> list[str]:
             lines.extend(_flatten_json(item, next_prefix))
         return lines
     label = prefix or "value"
-    return [f"{label}: {value}"]
+    encoded_path = urlsafe_b64encode(label.encode("utf-8")).decode("ascii").rstrip("=")
+    return [f"{JSON_PATH_MARKER_PREFIX}{encoded_path} -->", f"{label}: {value}"]
 
 
 def _read_csv(path: Path) -> str:

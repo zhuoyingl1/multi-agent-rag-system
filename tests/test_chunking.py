@@ -1,4 +1,4 @@
-from multi_agent_rag.documents import PPTX_SLIDE_BREAK_MARKER
+from multi_agent_rag.documents import JSON_PATH_MARKER_PREFIX, PPTX_SLIDE_BREAK_MARKER
 from multi_agent_rag.models import ChunkType, Document
 from multi_agent_rag.retrieval.chunking import StructuredChunker, chunk_document
 
@@ -141,3 +141,12 @@ def test_invalid_table_row_marker_remains_regular_text() -> None:
 
     assert "rag-table-rows:invalid" in chunks[0].text
     assert "row_start" not in chunks[0].metadata
+
+
+def test_invalid_json_path_marker_remains_regular_text() -> None:
+    document = Document(title="notes.md", text=f"{JSON_PATH_MARKER_PREFIX}invalid! -->\n\nVisible content.")
+
+    chunks = chunk_document(document)
+
+    assert "rag-json-path:invalid!" in chunks[0].text
+    assert "json_path" not in chunks[0].metadata

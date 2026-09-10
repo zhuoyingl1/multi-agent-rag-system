@@ -102,3 +102,15 @@ def test_source_locator_prefers_section_and_table_rows() -> None:
         "row_end": 18,
         "section": "Worksheet: Summary",
     }
+
+
+def test_source_locator_formats_json_path() -> None:
+    locator = build_source_locator(2, {"json_path": "projects[1].name", "line_start": "7", "line_end": "7"})
+
+    assert locator == {
+        "label": "JSON path projects[1].name",
+        "chunk_index": 2,
+        "line_start": 7,
+        "line_end": 7,
+        "json_path": "projects[1].name",
+    }
