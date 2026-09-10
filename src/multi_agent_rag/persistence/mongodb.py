@@ -199,6 +199,16 @@ class DocumentRepository:
         )
         return result.matched_count > 0
 
+    def update_title(self, document_id: str, title: str) -> bool:
+        normalized_title = title.strip()
+        if not normalized_title:
+            raise ValueError("Document title must not be empty.")
+        result = self.collection.update_one(
+            _document_filter(document_id),
+            {"$set": {"title": normalized_title, "updated_at": utc_now()}},
+        )
+        return result.matched_count > 0
+
     def delete(self, document_id: str) -> bool:
         result = self.collection.delete_one(_document_filter(document_id))
         return result.deleted_count > 0

@@ -707,6 +707,26 @@ def test_document_can_be_assigned_to_knowledge_space(monkeypatch) -> None:
     )
 
 
+def test_update_document_renames_catalog_record(monkeypatch) -> None:
+    repository = MagicMock()
+    repository.update_title.return_value = True
+    repository.get.return_value = replace(
+        fake_document(DocumentStatus.COMPLETED),
+        title="Research notes",
+    )
+    monkeypatch.setattr("multi_agent_rag.api.main.DocumentRepository.from_store", lambda _store: repository)
+    client = TestClient(build_app())
+
+    response = client.put(
+        "/documents/507f1f77bcf86cd799439011",
+        json={"title": "Research notes"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["filename"] == "Research notes"
+    repository.update_title.assert_called_once_with("507f1f77bcf86cd799439011", "Research notes")
+
+
 def test_document_chunks_endpoint_returns_filtered_locations(monkeypatch) -> None:
     document_repository = MagicMock()
     document_repository.get.return_value = fake_document(DocumentStatus.COMPLETED)

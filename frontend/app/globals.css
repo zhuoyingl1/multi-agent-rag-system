@@ -916,13 +916,19 @@ textarea:focus {
 
 .indexedDocumentRow {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 42px 42px;
+  grid-template-columns: minmax(0, 1fr) repeat(3, 42px);
   gap: 8px;
 }
 
 .indexedDocumentRow .smallIconButton {
   width: 42px;
   height: 42px;
+}
+
+.documentRenameRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px 42px;
+  gap: 8px;
 }
 
 .uploadButton {

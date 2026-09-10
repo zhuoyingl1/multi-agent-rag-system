@@ -211,6 +211,19 @@ def test_document_repository_filters_and_assigns_knowledge_space() -> None:
     assert collection.update_one.call_args.args[1]["$set"]["knowledge_space_id"] == "space-id"
 
 
+def test_document_repository_updates_normalized_title() -> None:
+    collection = MagicMock()
+    collection.update_one.return_value = SimpleNamespace(matched_count=1)
+    repository = DocumentRepository(collection)
+
+    updated = repository.update_title(str(ObjectId()), "  Research notes  ")
+
+    assert updated is True
+    update = collection.update_one.call_args.args[1]["$set"]
+    assert update["title"] == "Research notes"
+    assert "updated_at" in update
+
+
 def test_conversation_repository_creates_and_adds_messages() -> None:
     collection = MagicMock()
     collection.update_one.return_value = SimpleNamespace(matched_count=1)

@@ -239,6 +239,9 @@ export default function Home() {
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [documentStatus, setDocumentStatus] = useState<DocumentStatusResponse | null>(null);
   const [documents, setDocuments] = useState<DocumentStatusResponse[]>([]);
+  const [editingDocumentTitle, setEditingDocumentTitle] = useState(false);
+  const [documentTitleDraft, setDocumentTitleDraft] = useState("");
+  const [updatingDocumentTitle, setUpdatingDocumentTitle] = useState(false);
   const [knowledgeSpaces, setKnowledgeSpaces] = useState<KnowledgeSpace[]>([]);
   const [knowledgeSpaceId, setKnowledgeSpaceId] = useState("");
   const [newSpaceName, setNewSpaceName] = useState("");
@@ -483,6 +486,8 @@ export default function Home() {
     setDocumentId("");
     setDocumentName("");
     setDocumentStatus(null);
+    setEditingDocumentTitle(false);
+    setDocumentTitleDraft("");
     setUploadStatus(null);
     setChunkPreview(null);
     setPreviewQuery("");
@@ -713,6 +718,8 @@ export default function Home() {
     setDocumentId(selected?.document_id ?? "");
     setDocumentName(selected?.filename ?? "");
     setDocumentStatus(selected);
+    setEditingDocumentTitle(false);
+    setDocumentTitleDraft("");
     setConversationId("");
     setConversationMessages([]);
     setResult(null);
@@ -738,6 +745,45 @@ export default function Home() {
     void refreshConversations(selected?.document_id ?? "", knowledgeSpaceId);
   }
 
+  function editDocumentTitle() {
+    if (!documentId) {
+      return;
+    }
+    setDocumentTitleDraft(documentName);
+    setEditingDocumentTitle(true);
+  }
+
+  async function updateDocumentTitle() {
+    const title = documentTitleDraft.trim();
+    if (!documentId || !title) {
+      return;
+    }
+    setUpdatingDocumentTitle(true);
+    setError(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/documents/${documentId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, `Document update failed with ${response.status}`));
+      }
+      const updated = (await response.json()) as DocumentStatusResponse;
+      setDocuments((current) =>
+        current.map((document) => (document.document_id === documentId ? updated : document)),
+      );
+      setDocumentName(updated.filename);
+      setDocumentStatus(updated);
+      setEditingDocumentTitle(false);
+      setDocumentTitleDraft("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Document update failed");
+    } finally {
+      setUpdatingDocumentTitle(false);
+    }
+  }
+
   async function deleteDocument() {
     if (!documentId || !window.confirm(`Delete ${documentName} and all of its indexed data?`)) {
       return;
@@ -752,6 +798,8 @@ export default function Home() {
       setDocumentId("");
       setDocumentName("");
       setDocumentStatus(null);
+      setEditingDocumentTitle(false);
+      setDocumentTitleDraft("");
       setConversationId("");
       setConversationMessages([]);
       setConversations([]);
@@ -1083,6 +1131,16 @@ export default function Home() {
             <button
               className="smallIconButton"
               type="button"
+              onClick={editDocumentTitle}
+              disabled={!hydrated || !documentId || uploading || reindexing || deleting || loading}
+              aria-label="Rename document"
+              title="Rename document"
+            >
+              <Pencil size={17} />
+            </button>
+            <button
+              className="smallIconButton"
+              type="button"
               onClick={refreshDocumentIndex}
               disabled={!hydrated || !documentId || uploading || reindexing || loading}
               aria-label={documentStatus?.status === "failed" ? "Retry document indexing" : "Reindex document"}
@@ -1101,6 +1159,46 @@ export default function Home() {
               {deleting ? <Loader2 className="spin" size={17} /> : <Trash2 size={17} />}
             </button>
           </div>
+          {editingDocumentTitle && (
+            <div className="documentRenameRow">
+              <input
+                autoFocus
+                value={documentTitleDraft}
+                onChange={(event) => setDocumentTitleDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void updateDocumentTitle();
+                  }
+                  if (event.key === "Escape") {
+                    setEditingDocumentTitle(false);
+                  }
+                }}
+                maxLength={200}
+                aria-label="Document title"
+              />
+              <button
+                className="smallIconButton"
+                type="button"
+                onClick={() => void updateDocumentTitle()}
+                disabled={!documentTitleDraft.trim() || updatingDocumentTitle}
+                aria-label="Save document title"
+                title="Save title"
+              >
+                {updatingDocumentTitle ? <Loader2 className="spin" size={17} /> : <Check size={17} />}
+              </button>
+              <button
+                className="smallIconButton"
+                type="button"
+                onClick={() => setEditingDocumentTitle(false)}
+                disabled={updatingDocumentTitle}
+                aria-label="Cancel document rename"
+                title="Cancel"
+              >
+                <X size={17} />
+              </button>
+            </div>
+          )}
 
           <label htmlFor="documentUpload">{knowledgeSpaceId ? "Upload to knowledge space" : "Upload document"}</label>
           <div className="uploadRow">

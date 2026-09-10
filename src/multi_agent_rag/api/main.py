@@ -205,6 +205,12 @@ class DocumentSpaceUpdateRequest(BaseModel):
     knowledge_space_id: str | None = Field(default=None, min_length=1)
 
 
+class DocumentUpdateRequest(BaseModel):
+    """Update user-editable document metadata."""
+
+    title: str = Field(min_length=1, max_length=200)
+
+
 def build_app() -> FastAPI:
     app = FastAPI(title="Multi-Agent RAG System V2", version="0.1.0")
     app.add_middleware(
@@ -318,6 +324,20 @@ def build_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return document_status_payload(updated or document).model_dump()
+
+    @app.put("/documents/{document_id}")
+    def update_document(document_id: str, request: DocumentUpdateRequest) -> dict[str, Any]:
+        repository = DocumentRepository.from_store(MONGO_STORE)
+        try:
+            updated = repository.update_title(document_id, request.title)
+            if not updated:
+                raise HTTPException(status_code=404, detail=f"Document not found: {document_id}")
+            document = repository.get(document_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if document is None:
+            raise HTTPException(status_code=404, detail=f"Document not found: {document_id}")
+        return document_status_payload(document).model_dump()
 
     @app.get("/documents/{document_id}")
     def document_status(document_id: str) -> dict[str, Any]:
