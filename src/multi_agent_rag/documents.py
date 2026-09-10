@@ -19,6 +19,7 @@ PDF_EXTENSIONS = {".pdf"}
 WORD_EXTENSIONS = {".docx"}
 PRESENTATION_EXTENSIONS = {".pptx"}
 SPREADSHEET_EXTENSIONS = {".xlsx"}
+HTML_EXTENSIONS = {".html", ".htm"}
 SUPPORTED_EXTENSIONS = (
     TEXT_EXTENSIONS
     | JSON_EXTENSIONS
@@ -27,6 +28,7 @@ SUPPORTED_EXTENSIONS = (
     | WORD_EXTENSIONS
     | PRESENTATION_EXTENSIONS
     | SPREADSHEET_EXTENSIONS
+    | HTML_EXTENSIONS
 )
 PDF_PAGE_BREAK_MARKER = "<!-- rag-page-break -->"
 PPTX_SLIDE_BREAK_MARKER = "<!-- rag-slide-break -->"
@@ -62,6 +64,9 @@ def load_document(path: str | Path) -> Document:
     elif extension in SPREADSHEET_EXTENSIONS:
         text, spreadsheet_metadata = _read_xlsx(document_path)
         document_type = "spreadsheet"
+    elif extension in HTML_EXTENSIONS:
+        text, html_metadata = _read_html(document_path)
+        document_type = "html"
     else:
         supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
         raise ValueError(f"Unsupported document extension '{extension}'. Supported extensions: {supported}")
@@ -79,6 +84,8 @@ def load_document(path: str | Path) -> Document:
         metadata.update(presentation_metadata)
     elif extension in SPREADSHEET_EXTENSIONS:
         metadata.update(spreadsheet_metadata)
+    elif extension in HTML_EXTENSIONS:
+        metadata.update(html_metadata)
 
     return Document(
         title=document_path.name,
@@ -335,6 +342,70 @@ def _format_spreadsheet_value(value: Any) -> str:
     if isinstance(value, (datetime, date, time)):
         return value.isoformat()
     return _escape_markdown_cell(str(value))
+
+
+def _read_html(path: Path) -> tuple[str, dict[str, str]]:
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError as exc:
+        raise RuntimeError("HTML ingestion requires beautifulsoup4. Install project dependencies before loading HTML files.") from exc
+
+    soup = BeautifulSoup(path.read_bytes(), "html.parser")
+    for element in soup.find_all(["script", "style", "noscript", "template", "svg"]):
+        element.decompose()
+
+    root = soup.body or soup
+    block_names = {"h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "pre", "table", "blockquote"}
+    blocks: list[str] = []
+    table_count = 0
+    for element in root.find_all(block_names):
+        if element.find_parent(block_names):
+            continue
+        rendered = _format_html_block(element)
+        if rendered:
+            blocks.append(rendered)
+            if element.name == "table":
+                table_count += 1
+
+    html_title = soup.title.get_text(" ", strip=True) if soup.title else ""
+    if not blocks and html_title:
+        blocks.append(f"# {html_title}")
+    if not blocks:
+        raise ValueError(f"No extractable content found in HTML: {path}")
+
+    metadata = {
+        "element_count": str(len(blocks)),
+        "table_count": str(table_count),
+        "extraction_method": "beautifulsoup4",
+    }
+    if html_title:
+        metadata["html_title"] = html_title
+    return "\n\n".join(blocks), metadata
+
+
+def _format_html_block(element: Any) -> str:
+    name = element.name
+    if name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+        text = element.get_text(" ", strip=True)
+        return f"{'#' * int(name[1])} {text}" if text else ""
+    if name == "table":
+        rows = []
+        for row in element.find_all("tr"):
+            cells = row.find_all(["th", "td"], recursive=False)
+            values = [_escape_markdown_cell(cell.get_text(" ", strip=True)) for cell in cells]
+            if values:
+                rows.append(values)
+        return _format_markdown_table(rows)
+    if name == "pre":
+        text = element.get_text("\n", strip=True)
+        return f"```\n{text}\n```" if text else ""
+
+    text = element.get_text(" ", strip=True)
+    if name == "li":
+        return f"- {text}" if text else ""
+    if name == "blockquote":
+        return "\n".join(f"> {line}" for line in text.splitlines()) if text else ""
+    return text
 
 
 def _normalize_extracted_text(text: str) -> str:

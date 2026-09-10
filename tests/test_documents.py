@@ -173,6 +173,54 @@ def test_load_xlsx_rejects_workbooks_without_extractable_cells(tmp_path) -> None
         load_document(path)
 
 
+def test_load_html_preserves_visible_structure(tmp_path) -> None:
+    path = tmp_path / "report.html"
+    path.write_text(
+        """<!doctype html>
+<html>
+  <head>
+    <title>RAG Report</title>
+    <style>.hidden { display: none; }</style>
+    <script>window.secret = 'not indexed';</script>
+  </head>
+  <body>
+    <h1>System Overview</h1>
+    <p>Hybrid retrieval combines multiple signals.</p>
+    <ul><li>Keyword retrieval</li><li>Vector retrieval</li></ul>
+    <pre><code>score = reranker.rank(results)</code></pre>
+    <table>
+      <tr><th>Metric</th><th>Value</th></tr>
+      <tr><td>Grounding</td><td>0.95</td></tr>
+    </table>
+  </body>
+</html>""",
+        encoding="utf-8",
+    )
+
+    document = load_document(path)
+    chunks = chunk_document(document)
+
+    assert document.metadata["document_type"] == "html"
+    assert document.metadata["html_title"] == "RAG Report"
+    assert document.metadata["table_count"] == "1"
+    assert document.metadata["extraction_method"] == "beautifulsoup4"
+    assert "# System Overview" in document.text
+    assert "- Keyword retrieval" in document.text
+    assert "```\nscore = reranker.rank(results)\n```" in document.text
+    assert "| Grounding | 0.95 |" in document.text
+    assert "window.secret" not in document.text
+    assert {chunk.chunk_type for chunk in chunks} >= {ChunkType.PROSE, ChunkType.CODE, ChunkType.TABLE}
+    assert all(chunk.metadata.get("section") == "System Overview" for chunk in chunks)
+
+
+def test_load_html_rejects_files_without_visible_content(tmp_path) -> None:
+    path = tmp_path / "empty.html"
+    path.write_text("<html><head><script>ignored()</script></head><body></body></html>", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="No extractable content found in HTML"):
+        load_document(path)
+
+
 def test_normalize_extracted_text_cleans_pdf_artifacts() -> None:
     text = "Skills \uf06c RAG\u00a0systems\n\n\nTools \ufffd FastAPI"
 
