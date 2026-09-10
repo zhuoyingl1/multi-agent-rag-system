@@ -267,13 +267,120 @@ textarea:focus {
   margin: 0;
   padding: 22px;
   overflow: auto;
-  white-space: pre-wrap;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfcfb;
   color: var(--ink);
   font-size: 16px;
   line-height: 1.75;
+}
+
+.answerText > :first-child {
+  margin-top: 0;
+}
+
+.answerText > :last-child {
+  margin-bottom: 0;
+}
+
+.answerText h1,
+.answerText h2,
+.answerText h3 {
+  margin: 22px 0 8px;
+  line-height: 1.35;
+}
+
+.answerText h1 {
+  font-size: 22px;
+}
+
+.answerText h2 {
+  font-size: 19px;
+}
+
+.answerText h3 {
+  font-size: 17px;
+}
+
+.answerText p,
+.answerText ul,
+.answerText ol,
+.answerText blockquote,
+.answerText pre,
+.answerText table {
+  margin: 0 0 14px;
+}
+
+.answerText ul,
+.answerText ol {
+  padding-left: 24px;
+}
+
+.answerText li + li {
+  margin-top: 4px;
+}
+
+.answerText blockquote {
+  padding-left: 14px;
+  border-left: 3px solid var(--brand);
+  color: var(--muted);
+}
+
+.answerText pre {
+  max-width: 100%;
+  padding: 14px;
+  overflow-x: auto;
+  border-radius: 6px;
+  background: #17211f;
+  color: #f4f7f6;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.answerText :not(pre) > code {
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: #e8efed;
+  color: var(--brand-dark);
+  font-size: 0.9em;
+}
+
+.answerText table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.answerText th,
+.answerText td {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  text-align: left;
+}
+
+.answerText th {
+  background: var(--panel-soft);
+}
+
+.answerText a {
+  color: var(--brand-dark);
+  font-weight: 700;
+}
+
+.citationLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: #dcefeb;
+  text-decoration: none;
+}
+
+.citationLink:hover,
+.citationLink:focus-visible {
+  background: #c4e2dc;
+  outline: 2px solid rgba(15, 118, 110, 0.22);
 }
 
 .answerWarning {
@@ -836,6 +943,13 @@ textarea:focus {
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #fbfcfb;
+  scroll-margin-top: 24px;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.sourceItem.active {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.16);
 }
 
 .uploadQueueHeader {

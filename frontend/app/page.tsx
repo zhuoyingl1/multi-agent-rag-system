@@ -28,6 +28,8 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
+import AnswerMarkdown from "./answer-markdown";
+
 type Source = {
   citation_id: string;
   chunk_id: string;
@@ -219,6 +221,7 @@ export default function Home() {
   const [editingConversationId, setEditingConversationId] = useState("");
   const [conversationTitleDraft, setConversationTitleDraft] = useState("");
   const [updatingConversationId, setUpdatingConversationId] = useState("");
+  const [activeCitationId, setActiveCitationId] = useState("");
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [streamedAnswer, setStreamedAnswer] = useState("");
   const [metrics, setMetrics] = useState<HealthMetrics | null>(null);
@@ -398,6 +401,7 @@ export default function Home() {
     setEvents([]);
     setResult(null);
     setStreamedAnswer("");
+    setActiveCitationId("");
 
     try {
       const activeConversationId = await ensureConversation();
@@ -428,6 +432,7 @@ export default function Home() {
     setQuery("");
     setResult(null);
     setStreamedAnswer("");
+    setActiveCitationId("");
     setEvents([]);
     setError(null);
   }
@@ -468,6 +473,7 @@ export default function Home() {
     setConversationMessages([]);
     setResult(null);
     setStreamedAnswer("");
+    setActiveCitationId("");
     setEvents([]);
     setError(null);
     void refreshConversations("", selectedSpaceId);
@@ -711,6 +717,7 @@ export default function Home() {
     setConversationMessages([]);
     setResult(null);
     setStreamedAnswer("");
+    setActiveCitationId("");
     setEvents([]);
     setError(null);
     setPreviewQuery("");
@@ -1204,7 +1211,13 @@ export default function Home() {
           {!error && !displayedAnswer && <div className="emptyState">Run a query to inspect the grounded answer.</div>}
           {displayedAnswer && (
             <>
-              <div className="answerText">{displayedAnswer}</div>
+              <div className="answerText">
+                <AnswerMarkdown
+                  content={displayedAnswer}
+                  citationIds={(result?.sources ?? []).map((source) => source.citation_id)}
+                  onCitationClick={setActiveCitationId}
+                />
+              </div>
               {answerWarning && <div className="answerWarning">{answerWarning}</div>}
             </>
           )}
@@ -1318,7 +1331,11 @@ export default function Home() {
                   conversationMessages.map((message) => (
                     <article className={`conversationMessage ${message.role}`} key={message.message_id}>
                       <span>{message.role === "user" ? "Question" : "Answer"}</span>
-                      <p>{message.content}</p>
+                      {message.role === "assistant" ? (
+                        <AnswerMarkdown content={message.content} />
+                      ) : (
+                        <p>{message.content}</p>
+                      )}
                     </article>
                   ))
                 )}
@@ -1414,7 +1431,11 @@ export default function Home() {
           </div>
           <div className="sourceList">
             {(result?.sources ?? []).map((source) => (
-              <article className="sourceItem" key={source.chunk_id}>
+              <article
+                id={`source-${source.citation_id}`}
+                className={`sourceItem ${activeCitationId === source.citation_id ? "active" : ""}`}
+                key={source.chunk_id}
+              >
                 <div className="sourceMeta">
                   <span>[{source.citation_id}]</span>
                   <span>{source.title ?? source.chunk_id}</span>

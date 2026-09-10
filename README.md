@@ -57,6 +57,7 @@ The application now supports persistent, versioned document indexing across Mong
 - Scoped conversation history with question-based titles, message review, rename, and deletion
 - Token-level Ollama answer streaming over SSE
 - Source citations with page, line, row, section, and JSON-path locators
+- GitHub-flavored Markdown answers with clickable source citations
 
 ## Planned Capabilities
 
