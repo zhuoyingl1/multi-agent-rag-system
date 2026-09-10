@@ -16,8 +16,12 @@ JSON_EXTENSIONS = {".json"}
 CSV_EXTENSIONS = {".csv"}
 PDF_EXTENSIONS = {".pdf"}
 WORD_EXTENSIONS = {".docx"}
-SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | JSON_EXTENSIONS | CSV_EXTENSIONS | PDF_EXTENSIONS | WORD_EXTENSIONS
+PRESENTATION_EXTENSIONS = {".pptx"}
+SUPPORTED_EXTENSIONS = (
+    TEXT_EXTENSIONS | JSON_EXTENSIONS | CSV_EXTENSIONS | PDF_EXTENSIONS | WORD_EXTENSIONS | PRESENTATION_EXTENSIONS
+)
 PDF_PAGE_BREAK_MARKER = "<!-- rag-page-break -->"
+PPTX_SLIDE_BREAK_MARKER = "<!-- rag-slide-break -->"
 
 
 def load_document(path: str | Path) -> Document:
@@ -44,6 +48,9 @@ def load_document(path: str | Path) -> Document:
     elif extension in WORD_EXTENSIONS:
         text, word_metadata = _read_docx(document_path)
         document_type = "word"
+    elif extension in PRESENTATION_EXTENSIONS:
+        text, presentation_metadata = _read_pptx(document_path)
+        document_type = "presentation"
     else:
         supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
         raise ValueError(f"Unsupported document extension '{extension}'. Supported extensions: {supported}")
@@ -57,6 +64,8 @@ def load_document(path: str | Path) -> Document:
         metadata["page_count"] = str(page_count)
     elif extension in WORD_EXTENSIONS:
         metadata.update(word_metadata)
+    elif extension in PRESENTATION_EXTENSIONS:
+        metadata.update(presentation_metadata)
 
     return Document(
         title=document_path.name,
@@ -182,19 +191,91 @@ def _format_docx_paragraph(paragraph: Any) -> str:
 
 def _format_docx_table(table: Any) -> str:
     rows = [[_escape_markdown_cell(cell.text) for cell in row.cells] for row in table.rows]
+    return _format_markdown_table(rows)
+
+
+def _escape_markdown_cell(value: str) -> str:
+    return _normalize_document_text(value).replace("|", "\\|").replace("\n", "<br>")
+
+
+def _read_pptx(path: Path) -> tuple[str, dict[str, str]]:
+    try:
+        from pptx import Presentation
+    except ImportError as exc:
+        raise RuntimeError("PPTX ingestion requires python-pptx. Install project dependencies before loading presentations.") from exc
+
+    presentation = Presentation(str(path))
+    slides: list[str] = []
+    text_slide_count = 0
+    table_count = 0
+
+    for slide in presentation.slides:
+        blocks: list[str] = []
+        title_shape = slide.shapes.title
+        if title_shape is not None:
+            title = _pptx_shape_text(title_shape)
+            if title:
+                blocks.append(f"# {title}")
+
+        shapes = sorted(slide.shapes, key=lambda shape: (shape.top, shape.left))
+        for shape in shapes:
+            if title_shape is not None and shape.element is title_shape.element:
+                continue
+            if getattr(shape, "has_table", False):
+                table = _format_pptx_table(shape.table)
+                if table:
+                    blocks.append(table)
+                    table_count += 1
+            elif getattr(shape, "has_text_frame", False):
+                text = _pptx_shape_text(shape)
+                if text:
+                    blocks.append(text)
+
+        slide_text = "\n\n".join(blocks)
+        slides.append(slide_text)
+        if slide_text:
+            text_slide_count += 1
+
+    if not any(slides):
+        raise ValueError(f"No extractable text found in PPTX: {path}")
+
+    metadata = {
+        "slide_count": str(len(presentation.slides)),
+        "text_slide_count": str(text_slide_count),
+        "table_count": str(table_count),
+        "extraction_method": "python-pptx",
+    }
+    properties = presentation.core_properties
+    if properties.author:
+        metadata["author"] = properties.author
+    if properties.subject:
+        metadata["subject"] = properties.subject
+    return f"\n\n{PPTX_SLIDE_BREAK_MARKER}\n\n".join(slides), metadata
+
+
+def _pptx_shape_text(shape: Any) -> str:
+    paragraphs = []
+    for paragraph in shape.text_frame.paragraphs:
+        text = paragraph.text.strip()
+        if text:
+            paragraphs.append(text)
+    return "\n".join(paragraphs)
+
+
+def _format_pptx_table(table: Any) -> str:
+    rows = [[_escape_markdown_cell(cell.text) for cell in row.cells] for row in table.rows]
+    return _format_markdown_table(rows)
+
+
+def _format_markdown_table(rows: list[list[str]]) -> str:
     rows = [row for row in rows if any(row)]
     if not rows:
         return ""
-
     width = max(len(row) for row in rows)
     normalized = [row + [""] * (width - len(row)) for row in rows]
     lines = [f"| {' | '.join(normalized[0])} |", f"| {' | '.join(['---'] * width)} |"]
     lines.extend(f"| {' | '.join(row)} |" for row in normalized[1:])
     return "\n".join(lines)
-
-
-def _escape_markdown_cell(value: str) -> str:
-    return _normalize_document_text(value).replace("|", "\\|").replace("\n", "<br>")
 
 
 def _normalize_extracted_text(text: str) -> str:

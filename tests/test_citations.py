@@ -62,3 +62,14 @@ def test_source_locator_can_be_reused_for_stored_chunk_preview() -> None:
         "page_start": 2,
         "page_end": 4,
     }
+
+
+def test_source_locator_formats_presentation_slides() -> None:
+    locator = build_source_locator(2, {"slide_start": "3", "slide_end": "5"})
+
+    assert locator == {
+        "label": "slides 3-5",
+        "chunk_index": 2,
+        "slide_start": 3,
+        "slide_end": 5,
+    }

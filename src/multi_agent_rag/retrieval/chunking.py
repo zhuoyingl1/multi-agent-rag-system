@@ -6,20 +6,20 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 import re
 
-from multi_agent_rag.documents import PDF_PAGE_BREAK_MARKER
+from multi_agent_rag.documents import PDF_PAGE_BREAK_MARKER, PPTX_SLIDE_BREAK_MARKER
 from multi_agent_rag.models import Chunk, ChunkType, Document, stable_chunk_id
 
 
 @dataclass(frozen=True)
 class LocatedBlock:
-    """A structured text block with its original line and page range."""
+    """A structured text block with its original line and source location."""
 
     chunk_type: ChunkType
     text: str
     line_start: int
     line_end: int
-    page_start: int | None = None
-    page_end: int | None = None
+    location_start: int | None = None
+    location_end: int | None = None
 
 
 class StructuredChunker:
@@ -31,8 +31,10 @@ class StructuredChunker:
 
     def chunk(self, document: Document) -> list[Chunk]:
         document_id = document.stable_id()
-        is_pdf = document.metadata.get("document_type") == "pdf"
-        blocks = list(self._blocks(document.text, track_pages=is_pdf))
+        document_type = document.metadata.get("document_type")
+        location_kind = "page" if document_type == "pdf" else "slide" if document_type == "presentation" else None
+        break_marker = PDF_PAGE_BREAK_MARKER if location_kind == "page" else PPTX_SLIDE_BREAK_MARKER if location_kind else None
+        blocks = list(self._blocks(document.text, break_marker=break_marker))
         chunks: list[Chunk] = []
         for block in blocks:
             for located in self._split_block(block):
@@ -45,9 +47,9 @@ class StructuredChunker:
                         "line_end": str(located.line_end),
                     }
                 )
-                if located.page_start is not None:
-                    metadata["page_start"] = str(located.page_start)
-                    metadata["page_end"] = str(located.page_end or located.page_start)
+                if located.location_start is not None and location_kind:
+                    metadata[f"{location_kind}_start"] = str(located.location_start)
+                    metadata[f"{location_kind}_end"] = str(located.location_end or located.location_start)
                 chunks.append(
                     Chunk(
                         document_id=document_id,
@@ -60,12 +62,12 @@ class StructuredChunker:
                 )
         return chunks
 
-    def _blocks(self, text: str, *, track_pages: bool = False) -> Iterable[LocatedBlock]:
+    def _blocks(self, text: str, *, break_marker: str | None = None) -> Iterable[LocatedBlock]:
         lines = text.splitlines()
         prose_buffer: list[str] = []
         prose_start = 0
         index = 0
-        page = 1
+        location_index = 1
 
         def flush_prose() -> LocatedBlock | None:
             if not prose_buffer:
@@ -76,18 +78,18 @@ class StructuredChunker:
             prose_buffer.clear()
             if not value:
                 return None
-            current_page = page if track_pages else None
-            return LocatedBlock(ChunkType.PROSE, value, line_start, line_end, current_page, current_page)
+            location = location_index if break_marker else None
+            return LocatedBlock(ChunkType.PROSE, value, line_start, line_end, location, location)
 
         while index < len(lines):
             line = lines[index]
             stripped = line.strip()
 
-            if track_pages and stripped == PDF_PAGE_BREAK_MARKER:
+            if break_marker and stripped == break_marker:
                 pending = flush_prose()
                 if pending:
                     yield pending
-                page += 1
+                location_index += 1
                 index += 1
                 continue
 
@@ -104,7 +106,9 @@ class StructuredChunker:
                         index += 1
                         break
                     index += 1
-                yield LocatedBlock(ChunkType.CODE, "\n".join(code_lines).strip(), start, index, page, page)
+                yield LocatedBlock(
+                    ChunkType.CODE, "\n".join(code_lines).strip(), start, index, location_index, location_index
+                )
                 continue
 
             if stripped.startswith("$$"):
@@ -120,7 +124,9 @@ class StructuredChunker:
                         index += 1
                         break
                     index += 1
-                yield LocatedBlock(ChunkType.FORMULA, "\n".join(formula_lines).strip(), start, index, page, page)
+                yield LocatedBlock(
+                    ChunkType.FORMULA, "\n".join(formula_lines).strip(), start, index, location_index, location_index
+                )
                 continue
 
             if self._is_table_line(line):
@@ -133,7 +139,9 @@ class StructuredChunker:
                 while index < len(lines) and self._is_table_line(lines[index]):
                     table_lines.append(lines[index])
                     index += 1
-                yield LocatedBlock(ChunkType.TABLE, "\n".join(table_lines).strip(), start, index, page, page)
+                yield LocatedBlock(
+                    ChunkType.TABLE, "\n".join(table_lines).strip(), start, index, location_index, location_index
+                )
                 continue
 
             if not stripped:
@@ -180,8 +188,8 @@ class StructuredChunker:
             text=" ".join(word.group() for word in words),
             line_start=line_start,
             line_end=line_end,
-            page_start=block.page_start,
-            page_end=block.page_end,
+            location_start=block.location_start,
+            location_end=block.location_end,
         )
 
     def _overlap_words(self, words: list[re.Match[str]]) -> list[re.Match[str]]:

@@ -2,8 +2,10 @@ import json
 
 import pytest
 from docx import Document as WordDocument
+from pptx import Presentation
+from pptx.util import Inches
 
-from multi_agent_rag.documents import _normalize_document_text, _normalize_extracted_text, load_document
+from multi_agent_rag.documents import PPTX_SLIDE_BREAK_MARKER, _normalize_document_text, _normalize_extracted_text, load_document
 from multi_agent_rag.models import ChunkType
 from multi_agent_rag.retrieval.chunking import chunk_document
 
@@ -42,7 +44,7 @@ def test_load_csv_document_serializes_rows(tmp_path) -> None:
 
 
 def test_load_document_rejects_unsupported_extension(tmp_path) -> None:
-    path = tmp_path / "notes.pptx"
+    path = tmp_path / "notes.rtf"
     path.write_text("unsupported", encoding="utf-8")
 
     with pytest.raises(ValueError, match="Unsupported document extension"):
@@ -89,6 +91,48 @@ def test_load_docx_rejects_documents_without_extractable_text(tmp_path) -> None:
     WordDocument().save(path)
 
     with pytest.raises(ValueError, match="No extractable text found in DOCX"):
+        load_document(path)
+
+
+def test_load_pptx_preserves_slides_and_tables(tmp_path) -> None:
+    path = tmp_path / "research.pptx"
+    source = Presentation()
+    source.core_properties.author = "Research Team"
+    first = source.slides.add_slide(source.slide_layouts[5])
+    first.shapes.title.text = "Retrieval Pipeline"
+    text_box = first.shapes.add_textbox(Inches(1), Inches(1.5), Inches(5), Inches(1))
+    text_box.text_frame.text = "Hybrid retrieval combines keyword, vector, and graph signals."
+    table = first.shapes.add_table(2, 2, Inches(1), Inches(3), Inches(5), Inches(1.5)).table
+    table.cell(0, 0).text = "Stage"
+    table.cell(0, 1).text = "Purpose"
+    table.cell(1, 0).text = "Reranking"
+    table.cell(1, 1).text = "Improve relevance"
+    second = source.slides.add_slide(source.slide_layouts[5])
+    second.shapes.title.text = "Evaluation"
+    second.shapes.add_textbox(Inches(1), Inches(2), Inches(5), Inches(1)).text_frame.text = "Grounding is measured against sources."
+    source.save(path)
+
+    document = load_document(path)
+    chunks = chunk_document(document)
+
+    assert document.metadata["document_type"] == "presentation"
+    assert document.metadata["slide_count"] == "2"
+    assert document.metadata["text_slide_count"] == "2"
+    assert document.metadata["table_count"] == "1"
+    assert document.metadata["extraction_method"] == "python-pptx"
+    assert document.metadata["author"] == "Research Team"
+    assert "# Retrieval Pipeline" in document.text
+    assert "| Reranking | Improve relevance |" in document.text
+    assert PPTX_SLIDE_BREAK_MARKER in document.text
+    assert {chunk.metadata["slide_start"] for chunk in chunks} == {"1", "2"}
+    assert ChunkType.TABLE in {chunk.chunk_type for chunk in chunks}
+
+
+def test_load_pptx_rejects_presentations_without_extractable_text(tmp_path) -> None:
+    path = tmp_path / "empty.pptx"
+    Presentation().save(path)
+
+    with pytest.raises(ValueError, match="No extractable text found in PPTX"):
         load_document(path)
 
 

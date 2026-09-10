@@ -1206,7 +1206,7 @@ export default function Home() {
               id="documentUpload"
               type="file"
               multiple
-              accept=".md,.markdown,.txt,.json,.csv,.pdf,.docx"
+              accept=".md,.markdown,.txt,.json,.csv,.pdf,.docx,.pptx"
               onChange={(event) => {
                 selectUploadFiles(Array.from(event.target.files ?? []));
                 event.currentTarget.value = "";

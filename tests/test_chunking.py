@@ -1,3 +1,4 @@
+from multi_agent_rag.documents import PPTX_SLIDE_BREAK_MARKER
 from multi_agent_rag.models import ChunkType, Document
 from multi_agent_rag.retrieval.chunking import StructuredChunker, chunk_document
 
@@ -48,6 +49,19 @@ def test_chunk_document_tracks_pdf_pages_without_indexing_markers() -> None:
 
     assert [chunk.metadata["page_start"] for chunk in chunks] == ["1", "2"]
     assert all("rag-page-break" not in chunk.text for chunk in chunks)
+
+
+def test_chunk_document_tracks_presentation_slides_without_indexing_markers() -> None:
+    document = Document(
+        title="briefing.pptx",
+        text=f"First slide.\n\n{PPTX_SLIDE_BREAK_MARKER}\n\nSecond slide.",
+        metadata={"document_type": "presentation", "slide_count": "2"},
+    )
+
+    chunks = chunk_document(document)
+
+    assert [chunk.metadata["slide_start"] for chunk in chunks] == ["1", "2"]
+    assert all("rag-slide-break" not in chunk.text for chunk in chunks)
 
 
 def test_chunk_ids_are_stable() -> None:
