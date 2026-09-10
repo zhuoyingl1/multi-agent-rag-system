@@ -1,8 +1,11 @@
 import json
 
 import pytest
+from docx import Document as WordDocument
 
 from multi_agent_rag.documents import _normalize_document_text, _normalize_extracted_text, load_document
+from multi_agent_rag.models import ChunkType
+from multi_agent_rag.retrieval.chunking import chunk_document
 
 
 def test_load_markdown_document(tmp_path) -> None:
@@ -39,10 +42,53 @@ def test_load_csv_document_serializes_rows(tmp_path) -> None:
 
 
 def test_load_document_rejects_unsupported_extension(tmp_path) -> None:
-    path = tmp_path / "notes.docx"
+    path = tmp_path / "notes.pptx"
     path.write_text("unsupported", encoding="utf-8")
 
     with pytest.raises(ValueError, match="Unsupported document extension"):
+        load_document(path)
+
+
+def test_load_docx_preserves_headings_lists_and_tables(tmp_path) -> None:
+    path = tmp_path / "research.docx"
+    source = WordDocument()
+    source.core_properties.author = "Research Team"
+    source.core_properties.subject = "RAG evaluation"
+    source.add_heading("System Overview", level=1)
+    source.add_paragraph("The pipeline retrieves and reranks grounded evidence.")
+    source.add_paragraph("Inspect source citations", style="List Bullet")
+    table = source.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "Metric"
+    table.cell(0, 1).text = "Value"
+    table.cell(1, 0).text = "Grounding"
+    table.cell(1, 1).text = "0.95"
+    source.save(path)
+
+    document = load_document(path)
+    chunks = chunk_document(document)
+
+    assert document.metadata == {
+        "source_path": str(path),
+        "document_type": "word",
+        "extension": ".docx",
+        "paragraph_count": "3",
+        "table_count": "1",
+        "extraction_method": "python-docx",
+        "author": "Research Team",
+        "subject": "RAG evaluation",
+    }
+    assert "# System Overview" in document.text
+    assert "- Inspect source citations" in document.text
+    assert "| Metric | Value |" in document.text
+    assert "| Grounding | 0.95 |" in document.text
+    assert ChunkType.TABLE in {chunk.chunk_type for chunk in chunks}
+
+
+def test_load_docx_rejects_documents_without_extractable_text(tmp_path) -> None:
+    path = tmp_path / "empty.docx"
+    WordDocument().save(path)
+
+    with pytest.raises(ValueError, match="No extractable text found in DOCX"):
         load_document(path)
 
 

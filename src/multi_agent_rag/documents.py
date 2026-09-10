@@ -15,7 +15,8 @@ TEXT_EXTENSIONS = {".txt", ".md", ".markdown"}
 JSON_EXTENSIONS = {".json"}
 CSV_EXTENSIONS = {".csv"}
 PDF_EXTENSIONS = {".pdf"}
-SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | JSON_EXTENSIONS | CSV_EXTENSIONS | PDF_EXTENSIONS
+WORD_EXTENSIONS = {".docx"}
+SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | JSON_EXTENSIONS | CSV_EXTENSIONS | PDF_EXTENSIONS | WORD_EXTENSIONS
 PDF_PAGE_BREAK_MARKER = "<!-- rag-page-break -->"
 
 
@@ -40,6 +41,9 @@ def load_document(path: str | Path) -> Document:
     elif extension in PDF_EXTENSIONS:
         text, page_count = _read_pdf(document_path)
         document_type = "pdf"
+    elif extension in WORD_EXTENSIONS:
+        text, word_metadata = _read_docx(document_path)
+        document_type = "word"
     else:
         supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
         raise ValueError(f"Unsupported document extension '{extension}'. Supported extensions: {supported}")
@@ -51,6 +55,8 @@ def load_document(path: str | Path) -> Document:
     }
     if extension in PDF_EXTENSIONS:
         metadata["page_count"] = str(page_count)
+    elif extension in WORD_EXTENSIONS:
+        metadata.update(word_metadata)
 
     return Document(
         title=document_path.name,
@@ -108,6 +114,87 @@ def _read_pdf(path: Path) -> tuple[str, int]:
     if not any(pages):
         raise ValueError(f"No extractable text found in PDF: {path}")
     return f"\n\n{PDF_PAGE_BREAK_MARKER}\n\n".join(pages), len(pages)
+
+
+def _read_docx(path: Path) -> tuple[str, dict[str, str]]:
+    try:
+        from docx import Document as WordDocument
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+    except ImportError as exc:
+        raise RuntimeError("DOCX ingestion requires python-docx. Install project dependencies before loading Word files.") from exc
+
+    document = WordDocument(str(path))
+    blocks: list[str] = []
+    paragraph_count = 0
+    table_count = 0
+
+    for element in document.element.body.iterchildren():
+        if element.tag.endswith("}p"):
+            paragraph = Paragraph(element, document)
+            text = _format_docx_paragraph(paragraph)
+            if text:
+                blocks.append(text)
+                paragraph_count += 1
+        elif element.tag.endswith("}tbl"):
+            table = Table(element, document)
+            text = _format_docx_table(table)
+            if text:
+                blocks.append(text)
+                table_count += 1
+
+    if not blocks:
+        raise ValueError(f"No extractable text found in DOCX: {path}")
+
+    properties = document.core_properties
+    metadata = {
+        "paragraph_count": str(paragraph_count),
+        "table_count": str(table_count),
+        "extraction_method": "python-docx",
+    }
+    if properties.author:
+        metadata["author"] = properties.author
+    if properties.subject:
+        metadata["subject"] = properties.subject
+    return "\n\n".join(blocks), metadata
+
+
+def _format_docx_paragraph(paragraph: Any) -> str:
+    text = paragraph.text.strip()
+    if not text:
+        return ""
+
+    style = paragraph.style
+    style_name = getattr(style, "name", "") or ""
+    style_id = getattr(style, "style_id", "") or ""
+    heading = re.match(r"Heading\s*(\d+)$", style_name, re.IGNORECASE) or re.match(
+        r"Heading(\d+)$", style_id, re.IGNORECASE
+    )
+    if heading:
+        level = min(max(int(heading.group(1)), 1), 6)
+        return f"{'#' * level} {text}"
+    if style_name.lower().startswith("list bullet") or style_id.lower().startswith("listbullet"):
+        return f"- {text}"
+    if style_name.lower().startswith("list number") or style_id.lower().startswith("listnumber"):
+        return f"1. {text}"
+    return text
+
+
+def _format_docx_table(table: Any) -> str:
+    rows = [[_escape_markdown_cell(cell.text) for cell in row.cells] for row in table.rows]
+    rows = [row for row in rows if any(row)]
+    if not rows:
+        return ""
+
+    width = max(len(row) for row in rows)
+    normalized = [row + [""] * (width - len(row)) for row in rows]
+    lines = [f"| {' | '.join(normalized[0])} |", f"| {' | '.join(['---'] * width)} |"]
+    lines.extend(f"| {' | '.join(row)} |" for row in normalized[1:])
+    return "\n".join(lines)
+
+
+def _escape_markdown_cell(value: str) -> str:
+    return _normalize_document_text(value).replace("|", "\\|").replace("\n", "<br>")
 
 
 def _normalize_extracted_text(text: str) -> str:

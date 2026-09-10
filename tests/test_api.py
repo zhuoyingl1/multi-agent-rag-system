@@ -1,6 +1,7 @@
 import pytest
 from dataclasses import replace
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -8,6 +9,7 @@ pytest.importorskip("fastapi")
 pytest.importorskip("anyio")
 
 from fastapi.testclient import TestClient
+from docx import Document as WordDocument
 
 from multi_agent_rag.api.main import build_app, run_query
 from multi_agent_rag.ingestion import (
@@ -613,6 +615,47 @@ def test_upload_document_returns_queryable_path(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["metrics"]["retrieved_sources"] >= 1
+
+
+def test_upload_document_accepts_docx(monkeypatch) -> None:
+    service = MagicMock()
+    service.register.side_effect = lambda **values: RegisteredDocument(
+        replace(
+            fake_document(),
+            title=values["title"],
+            file_type=values["file_type"],
+            file_path=values["file_path"],
+            file_size=values["file_size"],
+            file_hash=values["file_hash"],
+            metadata=values["metadata"],
+        ),
+        duplicate=False,
+    )
+    monkeypatch.setattr("multi_agent_rag.api.main.create_document_ingestion_service", lambda: service)
+    client = TestClient(build_app())
+    document = WordDocument()
+    document.add_heading("DOCX Upload", level=1)
+    document.add_paragraph("Word documents use the standard ingestion pipeline.")
+    content = BytesIO()
+    document.save(content)
+
+    response = client.post(
+        "/documents/upload",
+        files={
+            "file": (
+                "uploaded.docx",
+                content.getvalue(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    uploaded = response.json()
+    assert uploaded["filename"] == "uploaded.docx"
+    assert uploaded["document_path"].endswith(".docx")
+    assert service.register.call_args.kwargs["file_type"] == "docx"
+    service.process.assert_called_once()
 
 
 def test_upload_document_rejects_unsupported_extension(monkeypatch) -> None:

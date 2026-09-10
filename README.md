@@ -17,7 +17,8 @@ The application now supports persistent, versioned document indexing across Mong
 - Retrieval result scoring, highlights, and chunk-level deduplication
 - Deterministic planner, coordinator, expert, grounding judge, and summarizer agents
 - Local `ask` command for an end-to-end workflow demo
-- Document ingestion for text, Markdown, JSON, CSV, and basic text-based PDF files
+- Document ingestion for text, Markdown, JSON, CSV, DOCX, and basic text-based PDF files
+- DOCX structure preservation for headings, lists, and tables
 - PDF text cleanup for common extraction artifacts such as private-use bullets and replacement characters
 - Shared text normalization for Unicode artifacts, ligatures, private-use characters, control characters, and noisy PDF line wrapping
 - Local `ingest` command for document loading and chunking inspection
