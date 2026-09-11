@@ -257,6 +257,8 @@ Useful endpoints:
 - `GET /health/liveness`
 - `GET /health/readiness`
 - `GET /health/task-queue`
+- `GET /settings/runtime`
+- `PUT /settings/runtime`
 - `POST /auth/register`
 - `POST /auth/token`
 - `GET /auth/me`
@@ -290,6 +292,22 @@ Sample `/query` request:
   "retrieval_backend": "qdrant"
 }
 ```
+
+Sample runtime settings update:
+
+```json
+{
+  "top_k": 6,
+  "query_rewrite_enabled": true,
+  "query_rewrite_max_variants": 3,
+  "dynamic_top_k_enabled": true,
+  "context_budget_tokens": 2400,
+  "reranker_candidate_multiplier": 4,
+  "rrf_k": 60
+}
+```
+
+Send the payload to `PUT /settings/runtime`, then call `GET /settings/runtime` to confirm the new revision. Updates affect only requests that start after the update. The endpoint rejects unknown fields and does not accept credentials, service URLs, or model names. Settings return to environment defaults when the API process restarts.
 
 Sample `/evaluate` request:
 
@@ -339,7 +357,7 @@ Demo checks:
 - Run `Stream` mode and watch `answer_delta` events render progressively.
 - Inspect source snippets and retrieval highlights.
 - Check `Integrations` for local and optional production readiness.
-- Click `Run Eval` in the `Evaluation` panel and confirm `3/3 passed`.
+- Click `Run Eval` in the `Evaluation` panel and confirm `7/7 passed`.
 
 ## Current Limitations
 
@@ -349,3 +367,4 @@ Demo checks:
 - Ollama answer composition requires a running local Ollama service and an available model.
 - PDF ingestion depends on extractable text and does not perform OCR.
 - The deterministic judge uses lexical overlap and should be replaced or augmented with an LLM judge for production evaluation.
+- Runtime settings are process-scoped and are not yet synchronized across multiple API workers.

@@ -30,6 +30,7 @@ from multi_agent_rag.persistence import (
     KnowledgeSpaceRecord,
     UserRecord,
 )
+from multi_agent_rag.runtime_config import RuntimeSettings, RuntimeSettingsStore
 from multi_agent_rag.task_queue import DocumentTaskDispatchError, TaskQueueStatus
 
 
@@ -97,6 +98,47 @@ def test_health_endpoint() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "healthy"
+
+
+def test_runtime_settings_endpoints_read_and_update_whitelisted_values() -> None:
+    store = RuntimeSettingsStore(RuntimeSettings())
+    client = TestClient(build_app(store))
+
+    initial = client.get("/settings/runtime")
+    updated = client.put(
+        "/settings/runtime",
+        json={"top_k": 7, "query_rewrite_enabled": False, "context_budget_tokens": 2400},
+    )
+    current = client.get("/settings/runtime")
+
+    assert initial.status_code == 200
+    assert initial.json()["scope"] == "process"
+    assert initial.json()["source"] == "environment"
+    assert initial.json()["revision"] == 0
+    assert updated.status_code == 200
+    assert updated.json()["source"] == "runtime"
+    assert updated.json()["revision"] == 1
+    assert updated.json()["settings"]["top_k"] == 7
+    assert updated.json()["settings"]["query_rewrite_enabled"] is False
+    assert current.json() == updated.json()
+
+
+def test_runtime_settings_endpoint_rejects_invalid_or_unknown_values() -> None:
+    store = RuntimeSettingsStore(RuntimeSettings())
+    client = TestClient(build_app(store))
+
+    invalid_range = client.put(
+        "/settings/runtime",
+        json={"dynamic_top_k_min": 9, "dynamic_top_k_max": 4},
+    )
+    unknown_setting = client.put("/settings/runtime", json={"api_key": "must-not-be-accepted"})
+    wrong_type = client.put("/settings/runtime", json={"top_k": "7"})
+
+    assert invalid_range.status_code == 400
+    assert "dynamic_top_k_min" in invalid_range.json()["detail"]
+    assert unknown_setting.status_code == 422
+    assert wrong_type.status_code == 422
+    assert store.snapshot().revision == 0
 
 
 def test_authentication_register_login_and_current_user(monkeypatch) -> None:
@@ -348,6 +390,50 @@ def test_query_endpoint_returns_grounded_answer() -> None:
     assert all(source["source_locator"]["label"] for source in data["sources"])
 
 
+def test_query_endpoint_uses_runtime_top_k(monkeypatch) -> None:
+    monkeypatch.delenv("RERANKER_MODEL", raising=False)
+    expected = run_query(
+        "How does RAG reduce hallucination?",
+        Path("examples/sample_docs.md"),
+        orchestrator="local",
+        retrieval_backend="local",
+        require_llm_answer=False,
+    )
+    observed_top_k: list[int] = []
+
+    def fake_query(*args):
+        observed_top_k.append(args[9].top_k)
+        return expected
+
+    monkeypatch.setattr("multi_agent_rag.api.main.safe_run_query", fake_query)
+    store = RuntimeSettingsStore(RuntimeSettings(top_k=1))
+    client = TestClient(build_app(store))
+
+    first = client.post(
+        "/query",
+        json={
+            "query": "How does RAG reduce hallucination?",
+            "orchestrator": "local",
+            "retrieval_backend": "local",
+            "require_llm_answer": False,
+        },
+    )
+    client.put("/settings/runtime", json={"top_k": 2})
+    second = client.post(
+        "/query",
+        json={
+            "query": "How does RAG reduce hallucination?",
+            "orchestrator": "local",
+            "retrieval_backend": "local",
+            "require_llm_answer": False,
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert observed_top_k == [1, 2]
+
+
 def test_query_endpoint_uses_llm_answer_by_default(monkeypatch) -> None:
     def fake_post(_self, _path, _payload):
         return {"message": {"content": "RAG reduces hallucination by grounding answers in retrieved evidence [S1]."}}
@@ -388,6 +474,7 @@ def test_query_endpoint_uses_persistent_document_id(monkeypatch) -> None:
         _retrieval_query,
         _conversation_history,
         _owner_id,
+        _runtime_settings,
     ):
         captured["query"] = query
         captured["document_id"] = document_id

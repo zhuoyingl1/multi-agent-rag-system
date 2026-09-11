@@ -19,7 +19,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from multi_agent_rag.auth import (
     AuthenticationConfigurationError,
@@ -70,6 +70,7 @@ from multi_agent_rag.retrieval.factory import (
     create_document_scope_retriever,
     create_retriever,
 )
+from multi_agent_rag.runtime_config import RuntimeSettings, RuntimeSettingsSnapshot, RuntimeSettingsStore
 from multi_agent_rag.task_queue import DocumentTaskDispatchError, check_task_queue, dispatch_document_task
 
 DEFAULT_DOCUMENT_PATH = Path("examples/sample_docs.md")
@@ -110,6 +111,50 @@ class EvaluationRequest(BaseModel):
     cases_path: str = Field(default=str(DEFAULT_EVAL_CASES_PATH), min_length=1)
     orchestrator: str = Field(default="auto", pattern="^(auto|local|langgraph)$")
     retrieval_backend: str = Field(default="local", pattern="^(local|qdrant)$")
+
+
+class RuntimeSettingsUpdateRequest(BaseModel):
+    """Partial update for non-sensitive retrieval settings."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    top_k: int | None = Field(default=None, ge=1, le=20)
+    query_rewrite_enabled: bool | None = None
+    query_rewrite_max_variants: int | None = Field(default=None, ge=1, le=5)
+    dynamic_top_k_enabled: bool | None = None
+    dynamic_top_k_min: int | None = Field(default=None, ge=1, le=20)
+    dynamic_top_k_max: int | None = Field(default=None, ge=1, le=20)
+    dynamic_top_k_gap_high: float | None = Field(default=None, ge=0.0, le=10.0)
+    dynamic_top_k_gap_low: float | None = Field(default=None, ge=0.0, le=10.0)
+    context_budget_tokens: int | None = Field(default=None, ge=128, le=32000)
+    reranker_candidate_multiplier: int | None = Field(default=None, ge=1, le=10)
+    rrf_k: float | None = Field(default=None, ge=1.0, le=200.0)
+
+
+class RuntimeSettingsValues(BaseModel):
+    """Effective values exposed by the runtime settings API."""
+
+    top_k: int
+    query_rewrite_enabled: bool
+    query_rewrite_max_variants: int
+    dynamic_top_k_enabled: bool
+    dynamic_top_k_min: int
+    dynamic_top_k_max: int
+    dynamic_top_k_gap_high: float
+    dynamic_top_k_gap_low: float
+    context_budget_tokens: int
+    reranker_candidate_multiplier: int
+    rrf_k: float
+
+
+class RuntimeSettingsResponse(BaseModel):
+    """Current runtime settings and process-local revision metadata."""
+
+    scope: str = "process"
+    source: str
+    revision: int
+    updated_at: datetime | None
+    settings: RuntimeSettingsValues
 
 
 class UserRegistrationRequest(BaseModel):
@@ -299,7 +344,8 @@ def authenticate_api_request(
     return user
 
 
-def build_app() -> FastAPI:
+def build_app(runtime_settings_store: RuntimeSettingsStore | None = None) -> FastAPI:
+    settings_store = runtime_settings_store or RuntimeSettingsStore()
     app = FastAPI(
         title="Multi-Agent RAG System V2",
         version="0.1.0",
@@ -339,6 +385,18 @@ def build_app() -> FastAPI:
     def health_task_queue() -> JSONResponse:
         status = check_task_queue()
         return JSONResponse(status_code=200 if status.ready else 503, content=status.to_dict())
+
+    @app.get("/settings/runtime", response_model=RuntimeSettingsResponse)
+    def get_runtime_settings() -> RuntimeSettingsResponse:
+        return runtime_settings_response(settings_store.snapshot())
+
+    @app.put("/settings/runtime", response_model=RuntimeSettingsResponse)
+    def update_runtime_settings(request: RuntimeSettingsUpdateRequest) -> RuntimeSettingsResponse:
+        try:
+            snapshot = settings_store.update(request.model_dump(exclude_none=True))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return runtime_settings_response(snapshot)
 
     @app.post("/auth/register", openapi_extra={"security": []})
     def register_user(request: UserRegistrationRequest) -> dict[str, Any]:
@@ -746,7 +804,11 @@ def build_app() -> FastAPI:
 
     @app.post("/query")
     def query(request: QueryRequest, http_request: Request) -> dict[str, Any]:
-        result = run_query_request(request, owner_id=request_owner_id(http_request))
+        result = run_query_request(
+            request,
+            owner_id=request_owner_id(http_request),
+            runtime_settings=settings_store.snapshot().settings,
+        )
         metrics_registry.record_run(result.metrics)
         return workflow_payload(result)
 
@@ -754,6 +816,7 @@ def build_app() -> FastAPI:
     def query_stream(request: QueryRequest, http_request: Request) -> StreamingResponse:
         owner_id = request_owner_id(http_request)
         validate_query_source(request)
+        runtime_settings = settings_store.snapshot().settings
 
         def events():
             event_queue: Queue[Any] = Queue()
@@ -772,7 +835,7 @@ def build_app() -> FastAPI:
 
             def run_workflow() -> None:
                 try:
-                    result = run_query_request(request, on_stage, on_answer_delta, owner_id)
+                    result = run_query_request(request, on_stage, on_answer_delta, owner_id, runtime_settings)
                     result.metrics["streaming_mode"] = "token" if result.metrics["answer_type"] == "llm" else "complete"
                     result.metrics["time_to_first_token_ms"] = (
                         first_delta_ms if first_delta_ms is not None else result.metrics["latency_ms"]
@@ -824,6 +887,15 @@ def access_token_response(user: UserRecord) -> AccessTokenResponse:
     )
 
 
+def runtime_settings_response(snapshot: RuntimeSettingsSnapshot) -> RuntimeSettingsResponse:
+    return RuntimeSettingsResponse(
+        source=snapshot.source,
+        revision=snapshot.revision,
+        updated_at=snapshot.updated_at,
+        settings=snapshot.settings.to_dict(),
+    )
+
+
 def user_response(user: UserRecord) -> AuthenticatedUserResponse:
     return AuthenticatedUserResponse(
         user_id=user.user_id,
@@ -857,6 +929,7 @@ def run_query_request(
     on_stage: Callable[[str, object], None] | None = None,
     on_answer_delta: Callable[[str], None] | None = None,
     owner_id: str | None = None,
+    runtime_settings: RuntimeSettings | None = None,
 ) -> WorkflowResult:
     if request.document_id and request.knowledge_space_id:
         raise HTTPException(status_code=400, detail="Choose either document_id or knowledge_space_id, not both.")
@@ -874,6 +947,7 @@ def run_query_request(
             retrieval_query,
             history,
             owner_id,
+            runtime_settings,
         )
     elif request.document_id:
         result = safe_run_document_query(
@@ -886,6 +960,7 @@ def run_query_request(
             retrieval_query,
             history,
             owner_id,
+            runtime_settings,
         )
     else:
         result = safe_run_query(
@@ -898,6 +973,7 @@ def run_query_request(
             on_answer_delta,
             retrieval_query,
             history,
+            runtime_settings,
         )
     if conversations is not None and request.conversation_id is not None:
         conversations.add_turn(
@@ -923,13 +999,16 @@ def run_query(
     on_answer_delta: Callable[[str], None] | None = None,
     retrieval_query: str | None = None,
     conversation_history: list[dict[str, str]] | None = None,
+    runtime_settings: RuntimeSettings | None = None,
 ) -> WorkflowResult:
+    settings = runtime_settings or RuntimeSettings.from_env()
     document = load_document(document_path)
-    retriever = create_retriever(retrieval_backend)
+    retriever = create_retriever(retrieval_backend, settings.top_k, settings)
     retriever.index(chunk_document(document))
     try:
         return create_workflow(
             retriever,
+            top_k=settings.top_k,
             orchestrator=orchestrator,
             require_llm_answer=require_llm_answer,
             default_answer_provider="ollama" if require_llm_answer else None,
@@ -950,7 +1029,9 @@ def run_document_query(
     retrieval_query: str | None = None,
     conversation_history: list[dict[str, str]] | None = None,
     owner_id: str | None = None,
+    runtime_settings: RuntimeSettings | None = None,
 ) -> WorkflowResult:
+    settings = runtime_settings or RuntimeSettings.from_env()
     document = DocumentRepository.from_store(MONGO_STORE).get(document_id, owner_id)
     if document is None:
         raise DocumentQueryNotFoundError(f"Document not found: {document_id}")
@@ -959,10 +1040,11 @@ def run_document_query(
     if document_index_is_stale(document, configured_embedding_model()):
         raise RuntimeError("Document index is stale. Reindex the document before querying it.")
 
-    retriever = create_document_retriever(document_id)
+    retriever = create_document_retriever(document_id, settings.top_k, settings)
     try:
         return create_workflow(
             retriever,
+            top_k=settings.top_k,
             orchestrator=orchestrator,
             require_llm_answer=require_llm_answer,
             default_answer_provider="ollama" if require_llm_answer else None,
@@ -983,12 +1065,19 @@ def run_knowledge_space_query(
     retrieval_query: str | None = None,
     conversation_history: list[dict[str, str]] | None = None,
     owner_id: str | None = None,
+    runtime_settings: RuntimeSettings | None = None,
 ) -> WorkflowResult:
+    settings = runtime_settings or RuntimeSettings.from_env()
     documents = get_ready_knowledge_space_documents(knowledge_space_id, owner_id)
-    retriever = create_document_scope_retriever([document.document_id for document in documents])
+    retriever = create_document_scope_retriever(
+        [document.document_id for document in documents],
+        settings.top_k,
+        settings,
+    )
     try:
         return create_workflow(
             retriever,
+            top_k=settings.top_k,
             orchestrator=orchestrator,
             require_llm_answer=require_llm_answer,
             default_answer_provider="ollama" if require_llm_answer else None,
@@ -1240,6 +1329,7 @@ def safe_run_query(
     on_answer_delta: Callable[[str], None] | None = None,
     retrieval_query: str | None = None,
     conversation_history: list[dict[str, str]] | None = None,
+    runtime_settings: RuntimeSettings | None = None,
 ) -> WorkflowResult:
     try:
         return run_query(
@@ -1252,6 +1342,7 @@ def safe_run_query(
             on_answer_delta=on_answer_delta,
             retrieval_query=retrieval_query,
             conversation_history=conversation_history,
+            runtime_settings=runtime_settings,
         )
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1267,6 +1358,7 @@ def safe_run_document_query(
     retrieval_query: str | None = None,
     conversation_history: list[dict[str, str]] | None = None,
     owner_id: str | None = None,
+    runtime_settings: RuntimeSettings | None = None,
 ) -> WorkflowResult:
     try:
         return run_document_query(
@@ -1279,6 +1371,7 @@ def safe_run_document_query(
             retrieval_query=retrieval_query,
             conversation_history=conversation_history,
             owner_id=owner_id,
+            runtime_settings=runtime_settings,
         )
     except DocumentQueryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1296,6 +1389,7 @@ def safe_run_knowledge_space_query(
     retrieval_query: str | None = None,
     conversation_history: list[dict[str, str]] | None = None,
     owner_id: str | None = None,
+    runtime_settings: RuntimeSettings | None = None,
 ) -> WorkflowResult:
     try:
         return run_knowledge_space_query(
@@ -1308,6 +1402,7 @@ def safe_run_knowledge_space_query(
             retrieval_query,
             conversation_history,
             owner_id,
+            runtime_settings,
         )
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

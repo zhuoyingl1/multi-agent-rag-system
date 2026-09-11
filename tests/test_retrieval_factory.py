@@ -1,3 +1,4 @@
+from dataclasses import replace
 from unittest.mock import MagicMock
 
 import pytest
@@ -6,6 +7,7 @@ from multi_agent_rag.retrieval.factory import create_retriever
 from multi_agent_rag.retrieval.hybrid import HybridRetriever
 from multi_agent_rag.retrieval.qdrant_adapter import QdrantRetriever
 from multi_agent_rag.retrieval.reranking import RerankingRetriever
+from multi_agent_rag.runtime_config import RuntimeSettings
 
 
 @pytest.fixture
@@ -72,3 +74,24 @@ def test_create_retriever_wraps_backend_when_reranker_is_configured(monkeypatch:
     assert isinstance(retriever, RerankingRetriever)
     assert retriever.last_reranker == "lexical"
     assert retriever.candidate_multiplier == 4
+
+
+def test_create_retriever_applies_explicit_runtime_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RERANKER_MODEL", "local")
+    settings = replace(
+        RuntimeSettings(),
+        top_k=2,
+        dynamic_top_k_max=6,
+        context_budget_tokens=900,
+        reranker_candidate_multiplier=5,
+    )
+
+    retriever = create_retriever("local", runtime_settings=settings)
+
+    assert isinstance(retriever, RerankingRetriever)
+    assert isinstance(retriever.retriever, HybridRetriever)
+    assert retriever.retriever.top_k == 2
+    assert retriever.candidate_multiplier == 5
+    assert retriever.selection_policy is not None
+    assert retriever.selection_policy.max_results == 6
+    assert retriever.selection_policy.context_budget_tokens == 900
