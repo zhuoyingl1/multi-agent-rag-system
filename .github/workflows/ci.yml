@@ -22,10 +22,10 @@ jobs:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -37,7 +37,27 @@ jobs:
         run: python -m pip check
 
       - name: Run tests
+        env:
+          RETRIEVAL_BACKEND: local
         run: python -m pytest -q
+
+      - name: Enforce answer quality gates
+        run: >-
+          python -m multi_agent_rag eval
+          --orchestrator local
+          --retrieval-backend local
+          --min-pass-rate 1.0
+          --min-average-grounding 0.8
+
+      - name: Enforce retrieval quality gates
+        run: >-
+          python -m multi_agent_rag retrieval-eval
+          --retrieval-backend local
+          --top-k 5
+          --min-pass-rate 1.0
+          --min-average-recall 1.0
+          --min-mrr 0.6
+          --min-ndcg 0.7
 
   frontend:
     name: Frontend checks
@@ -50,10 +70,10 @@ jobs:
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -74,7 +94,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Validate Compose configuration
         run: docker compose config --quiet

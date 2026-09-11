@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 import pytest
 
 from multi_agent_rag.retrieval.factory import create_retriever
@@ -6,8 +8,20 @@ from multi_agent_rag.retrieval.qdrant_adapter import QdrantRetriever
 from multi_agent_rag.retrieval.reranking import RerankingRetriever
 
 
-def test_create_retriever_uses_external_qdrant_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture
+def qdrant_client_stub(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    client = MagicMock()
+    client.collection_exists.return_value = True
+    monkeypatch.setattr(QdrantRetriever, "_build_client", lambda self, url: client)
+    return client
+
+
+def test_create_retriever_uses_external_qdrant_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    qdrant_client_stub: MagicMock,
+) -> None:
     pytest.importorskip("qdrant_client")
+    monkeypatch.delenv("RETRIEVAL_BACKEND", raising=False)
     monkeypatch.delenv("QDRANT_URL", raising=False)
     monkeypatch.delenv("QDRANT_COLLECTION", raising=False)
     monkeypatch.delenv("RERANKER_MODEL", raising=False)
@@ -16,6 +30,7 @@ def test_create_retriever_uses_external_qdrant_by_default(monkeypatch: pytest.Mo
 
     assert isinstance(retriever, QdrantRetriever)
     assert retriever.url == "http://localhost:6333"
+    assert retriever.client is qdrant_client_stub
 
 
 def test_create_retriever_uses_local_when_requested(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -26,7 +41,10 @@ def test_create_retriever_uses_local_when_requested(monkeypatch: pytest.MonkeyPa
     assert isinstance(retriever, HybridRetriever)
 
 
-def test_create_retriever_uses_env_qdrant_config(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_create_retriever_uses_env_qdrant_config(
+    monkeypatch: pytest.MonkeyPatch,
+    qdrant_client_stub: MagicMock,
+) -> None:
     pytest.importorskip("qdrant_client")
     monkeypatch.setenv("QDRANT_URL", "http://localhost:6333")
     monkeypatch.setenv("QDRANT_COLLECTION", "research")
@@ -37,6 +55,7 @@ def test_create_retriever_uses_env_qdrant_config(monkeypatch: pytest.MonkeyPatch
     assert isinstance(retriever, QdrantRetriever)
     assert retriever.url == "http://localhost:6333"
     assert retriever.collection == "research"
+    assert retriever.client is qdrant_client_stub
 
 
 def test_create_retriever_rejects_unknown_backend() -> None:

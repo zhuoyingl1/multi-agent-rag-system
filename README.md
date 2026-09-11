@@ -97,6 +97,15 @@ python -m multi_agent_rag integrations
 python -m uvicorn multi_agent_rag.api.main:app --reload --app-dir src
 ```
 
+Evaluation commands can enforce minimum quality levels and return a non-zero process exit code when a threshold fails. The checked-in CI benchmark uses deterministic local retrieval so it does not depend on external services or paid APIs:
+
+```powershell
+python -m multi_agent_rag eval --orchestrator local --retrieval-backend local --min-pass-rate 1.0 --min-average-grounding 0.8
+python -m multi_agent_rag retrieval-eval --retrieval-backend local --top-k 5 --min-pass-rate 1.0 --min-average-recall 1.0 --min-mrr 0.6 --min-ndcg 0.7
+```
+
+Both commands accept `--max-average-latency-ms` for controlled performance environments. Latency is reported but not enforced in shared CI because runner performance is variable. JSON reports include every configured quality-gate check, its threshold, actual value, and pass status.
+
 Deployment probes are available at `GET /health/liveness` for process health and
 `GET /health/readiness` for live MongoDB, Qdrant, Neo4j, Ollama, and task queue readiness.
 `GET /health/task-queue` reports the selected task backend and responsive worker count.

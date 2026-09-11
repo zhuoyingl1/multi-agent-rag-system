@@ -17,6 +17,30 @@
       "query": "How do source coverage, latency, and error rate monitor answer quality and operations?",
       "relevant_chunk_indices": [5, 7],
       "min_recall_at_k": 1.0
+    },
+    {
+      "case_id": "semantic_vector_retrieval",
+      "query": "When does vector retrieval help compared with exact keyword matching?",
+      "relevant_chunk_indices": [3],
+      "min_recall_at_k": 1.0
+    },
+    {
+      "case_id": "graph_and_vector_stores",
+      "query": "What roles do Neo4j and Qdrant play in retrieval?",
+      "relevant_chunk_indices": [3],
+      "min_recall_at_k": 1.0
+    },
+    {
+      "case_id": "grounding_formula",
+      "query": "What does grounding_score compute from supported_claims and total_claims?",
+      "relevant_chunk_indices": [6],
+      "min_recall_at_k": 1.0
+    },
+    {
+      "case_id": "failure_monitoring",
+      "query": "Which metric tracks failed agents or retrieval failures?",
+      "relevant_chunk_indices": [7],
+      "min_recall_at_k": 1.0
     }
   ]
 }

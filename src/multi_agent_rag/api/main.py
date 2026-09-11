@@ -109,7 +109,7 @@ class EvaluationRequest(BaseModel):
     document_path: str = Field(default=str(DEFAULT_DOCUMENT_PATH), min_length=1)
     cases_path: str = Field(default=str(DEFAULT_EVAL_CASES_PATH), min_length=1)
     orchestrator: str = Field(default="auto", pattern="^(auto|local|langgraph)$")
-    retrieval_backend: str = Field(default="qdrant", pattern="^(local|qdrant)$")
+    retrieval_backend: str = Field(default="local", pattern="^(local|qdrant)$")
 
 
 class UserRegistrationRequest(BaseModel):

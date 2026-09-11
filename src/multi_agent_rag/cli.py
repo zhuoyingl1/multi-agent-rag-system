@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -12,6 +14,7 @@ from multi_agent_rag.documents import load_document
 from multi_agent_rag.evaluation import run_evaluation
 from multi_agent_rag.integrations import check_integrations
 from multi_agent_rag.orchestration import create_workflow
+from multi_agent_rag.quality_gates import QualityGateResult, evaluate_quality_gates
 from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.factory import create_retriever
 from multi_agent_rag.retrieval.neo4j_adapter import Neo4jGraphAdapter
@@ -22,6 +25,23 @@ def configure_output() -> None:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+def _unit_interval(value: str) -> float:
+    number = _non_negative_float(value)
+    if number > 1:
+        raise argparse.ArgumentTypeError("value must be between 0 and 1")
+    return number
+
+
+def _non_negative_float(value: str) -> float:
+    try:
+        number = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("value must be a number") from exc
+    if not math.isfinite(number) or number < 0:
+        raise argparse.ArgumentTypeError("value must be a finite non-negative number")
+    return number
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -54,6 +74,17 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--output", help="Optional path for the JSON evaluation report.")
     eval_parser.add_argument("--orchestrator", choices=["auto", "local", "langgraph"], default="auto", help="Workflow orchestration backend.")
     eval_parser.add_argument("--retrieval-backend", choices=["local", "qdrant"], default=None, help="Retrieval backend.")
+    eval_parser.add_argument("--min-pass-rate", type=_unit_interval, help="Fail below this case pass rate.")
+    eval_parser.add_argument(
+        "--min-average-grounding",
+        type=_unit_interval,
+        help="Fail below this average grounding score.",
+    )
+    eval_parser.add_argument(
+        "--max-average-latency-ms",
+        type=_non_negative_float,
+        help="Fail above this average latency in milliseconds.",
+    )
     eval_parser.set_defaults(func=run_eval)
 
     retrieval_eval_parser = subparsers.add_parser(
@@ -73,6 +104,23 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["local", "qdrant"],
         default=None,
         help="Retrieval backend.",
+    )
+    retrieval_eval_parser.add_argument("--min-pass-rate", type=_unit_interval, help="Fail below this case pass rate.")
+    retrieval_eval_parser.add_argument(
+        "--min-average-recall",
+        type=_unit_interval,
+        help="Fail below this average Recall@K.",
+    )
+    retrieval_eval_parser.add_argument("--min-mrr", type=_unit_interval, help="Fail below this mean reciprocal rank.")
+    retrieval_eval_parser.add_argument(
+        "--min-ndcg",
+        type=_unit_interval,
+        help="Fail below this average NDCG@K.",
+    )
+    retrieval_eval_parser.add_argument(
+        "--max-average-latency-ms",
+        type=_non_negative_float,
+        help="Fail above this average latency in milliseconds.",
     )
     retrieval_eval_parser.set_defaults(func=run_retrieval_eval)
 
@@ -175,12 +223,23 @@ def run_eval(args: argparse.Namespace) -> int:
         if case.missing_source_terms:
             print(f"  missing_source_terms: {', '.join(case.missing_source_terms)}")
 
+    gate = evaluate_quality_gates(
+        {
+            "pass_rate": report.pass_rate,
+            "average_grounding_score": report.average_grounding_score,
+            "average_latency_ms": report.average_latency_ms,
+        },
+        minimums={
+            "pass_rate": args.min_pass_rate,
+            "average_grounding_score": args.min_average_grounding,
+        },
+        maximums={"average_latency_ms": args.max_average_latency_ms},
+    )
+    _print_quality_gate(gate)
+
     if args.output:
-        output_path = Path(args.output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(report.to_json() + "\n", encoding="utf-8")
-        print(f"JSON report written to {output_path}")
-    return 0
+        _write_report(Path(args.output), report.to_dict(), gate)
+    return 0 if gate.passed else 1
 
 
 def run_retrieval_eval(args: argparse.Namespace) -> int:
@@ -214,12 +273,47 @@ def run_retrieval_eval(args: argparse.Namespace) -> int:
             f"latency_ms={case.latency_ms}"
         )
 
+    gate = evaluate_quality_gates(
+        {
+            "pass_rate": report.pass_rate,
+            "average_recall_at_k": report.average_recall_at_k,
+            "mean_reciprocal_rank": report.mean_reciprocal_rank,
+            "average_ndcg_at_k": report.average_ndcg_at_k,
+            "average_latency_ms": report.average_latency_ms,
+        },
+        minimums={
+            "pass_rate": args.min_pass_rate,
+            "average_recall_at_k": args.min_average_recall,
+            "mean_reciprocal_rank": args.min_mrr,
+            "average_ndcg_at_k": args.min_ndcg,
+        },
+        maximums={"average_latency_ms": args.max_average_latency_ms},
+    )
+    _print_quality_gate(gate)
+
     if args.output:
-        output_path = Path(args.output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(report.to_json() + "\n", encoding="utf-8")
-        print(f"JSON report written to {output_path}")
-    return 0
+        _write_report(Path(args.output), report.to_dict(), gate)
+    return 0 if gate.passed else 1
+
+
+def _print_quality_gate(gate: QualityGateResult) -> None:
+    if not gate.checks:
+        print("Quality gate: not configured")
+        return
+    print(f"Quality gate: {'PASS' if gate.passed else 'FAIL'}")
+    for check in gate.checks:
+        status = "PASS" if check.passed else "FAIL"
+        print(
+            f"- {status} {check.metric}: actual={check.actual} "
+            f"{check.comparison}={check.threshold}"
+        )
+
+
+def _write_report(output_path: Path, report: dict[str, object], gate: QualityGateResult) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    report["quality_gate"] = gate.to_dict()
+    output_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"JSON report written to {output_path}")
 
 
 def run_integrations(args: argparse.Namespace) -> int:

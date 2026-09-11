@@ -182,21 +182,22 @@ Sources: no retrieved sources
 Run the deterministic evaluation suite:
 
 ```powershell
-python -m multi_agent_rag eval --output output/eval-report.json
+python -m multi_agent_rag eval --retrieval-backend local --orchestrator local --min-pass-rate 1.0 --min-average-grounding 0.8 --output output/eval-report.json
 ```
 
 Expected summary:
 
 ```text
-cases: 3
-passed: 3
+cases: 7
+passed: 7
 failed: 0
 pass_rate: 1.0
 average_grounding_score: 1.0
 total_failed_agents: 0
+Quality gate: PASS
 ```
 
-The JSON report contains per-case answers, missing expected terms, missing source terms, grounding score, retrieved source count, latency, and failed-agent count.
+The JSON report contains per-case answers, missing expected terms, missing source terms, grounding score, retrieved source count, latency, failed-agent count, and configured quality-gate checks.
 
 ## Integration Readiness Demo
 
@@ -300,8 +301,8 @@ Expected `/evaluate` result:
 
 ```json
 {
-  "case_count": 3,
-  "passed_count": 3,
+  "case_count": 7,
+  "passed_count": 7,
   "failed_count": 0,
   "pass_rate": 1.0
 }

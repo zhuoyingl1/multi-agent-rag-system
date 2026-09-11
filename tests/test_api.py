@@ -1267,8 +1267,8 @@ def test_evaluate_endpoint_returns_report() -> None:
 
     assert response.status_code == 200
     data = response.json()
-    assert data["case_count"] == 3
-    assert data["passed_count"] == 3
+    assert data["case_count"] == 7
+    assert data["passed_count"] == 7
     assert data["failed_count"] == 0
 
 
