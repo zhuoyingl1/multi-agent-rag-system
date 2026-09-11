@@ -14,6 +14,7 @@ from multi_agent_rag.persistence import (
     DocumentStatus,
     KnowledgeSpaceRepository,
     MongoSettings,
+    UserRepository,
 )
 
 
@@ -85,6 +86,19 @@ def test_knowledge_space_repository_creates_and_lists_spaces() -> None:
     assert created.name == "Research"
     assert spaces[0].description == "Related technical documents"
     assert repository.count() == 1
+
+
+def test_user_repository_creates_and_reads_normalized_user() -> None:
+    collection = MagicMock()
+    repository = UserRepository(collection)
+
+    created = repository.create("Researcher@Example.COM", "Researcher", "scrypt-hash")
+    collection.find_one.return_value = collection.insert_one.call_args.args[0]
+    loaded = repository.get_by_email("researcher@example.com")
+
+    assert created.email == "researcher@example.com"
+    assert loaded == created
+    collection.create_index.assert_called_once_with("email", unique=True)
 
 
 def test_document_repository_updates_progress_and_completion() -> None:

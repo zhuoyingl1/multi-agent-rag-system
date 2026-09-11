@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from docx import Document as WordDocument
 
 from multi_agent_rag.api.main import build_app, run_query
+from multi_agent_rag.auth import hash_password
 from multi_agent_rag.health import DependencyStatus, ReadinessReport
 from multi_agent_rag.ingestion import (
     CHUNKING_VERSION,
@@ -27,6 +28,7 @@ from multi_agent_rag.persistence import (
     DocumentRecord,
     DocumentStatus,
     KnowledgeSpaceRecord,
+    UserRecord,
 )
 from multi_agent_rag.task_queue import DocumentTaskDispatchError, TaskQueueStatus
 
@@ -64,6 +66,19 @@ def fake_knowledge_space() -> KnowledgeSpaceRecord:
     )
 
 
+def fake_user(password: str = "secure-password") -> UserRecord:
+    now = datetime.now(UTC)
+    return UserRecord(
+        user_id="user-123",
+        email="researcher@example.com",
+        display_name="Researcher",
+        password_hash=hash_password(password),
+        active=True,
+        created_at=now,
+        updated_at=now,
+    )
+
+
 def test_health_endpoint() -> None:
     client = TestClient(build_app())
 
@@ -71,6 +86,82 @@ def test_health_endpoint() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "healthy"
+
+
+def test_authentication_register_login_and_current_user(monkeypatch) -> None:
+    monkeypatch.setenv("AUTH_REQUIRED", "true")
+    monkeypatch.setenv("JWT_SECRET", "test-secret-that-is-at-least-32-characters")
+    user = fake_user()
+    repository = MagicMock()
+    repository.create.return_value = user
+    repository.get_by_email.return_value = user
+    repository.get.return_value = user
+    monkeypatch.setattr("multi_agent_rag.api.main.UserRepository.from_store", lambda _store: repository)
+    client = TestClient(build_app())
+
+    registered = client.post(
+        "/auth/register",
+        json={
+            "email": "Researcher@Example.com",
+            "display_name": "Researcher",
+            "password": "secure-password",
+        },
+    )
+    logged_in = client.post(
+        "/auth/token",
+        json={"email": "researcher@example.com", "password": "secure-password"},
+    )
+    current_user = client.get(
+        "/auth/me",
+        headers={"Authorization": f"Bearer {logged_in.json()['access_token']}"},
+    )
+
+    assert registered.status_code == 200
+    assert registered.json()["token_type"] == "bearer"
+    assert registered.json()["user"]["email"] == "researcher@example.com"
+    assert logged_in.status_code == 200
+    assert logged_in.json()["expires_in"] == 3600
+    assert current_user.status_code == 200
+    assert current_user.json()["user_id"] == "user-123"
+
+
+def test_required_authentication_rejects_missing_and_invalid_tokens(monkeypatch) -> None:
+    monkeypatch.setenv("AUTH_REQUIRED", "true")
+    monkeypatch.setenv("JWT_SECRET", "test-secret-that-is-at-least-32-characters")
+    client = TestClient(build_app())
+
+    missing = client.get("/health/metrics")
+    invalid = client.get("/health/metrics", headers={"Authorization": "Bearer invalid-token"})
+    public = client.get("/health")
+
+    assert missing.status_code == 401
+    assert missing.headers["www-authenticate"] == "Bearer"
+    assert invalid.status_code == 401
+    assert public.status_code == 200
+
+
+def test_authentication_hides_storage_failures(monkeypatch) -> None:
+    repository = MagicMock()
+    repository.get_by_email.side_effect = RuntimeError("mongodb://user:secret@private-host")
+    monkeypatch.setattr("multi_agent_rag.api.main.UserRepository.from_store", lambda _store: repository)
+    client = TestClient(build_app())
+
+    response = client.post(
+        "/auth/token",
+        json={"email": "researcher@example.com", "password": "secure-password"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Authentication service is unavailable."
+    assert "secret" not in response.text
+
+
+def test_openapi_marks_public_and_protected_authentication_paths() -> None:
+    schema = build_app().openapi()
+
+    assert schema["components"]["securitySchemes"]["HTTPBearer"]["scheme"] == "bearer"
+    assert schema["paths"]["/query"]["post"]["security"] == [{"HTTPBearer": []}]
+    assert schema["paths"]["/auth/token"]["post"]["security"] == []
 
 
 def test_task_queue_health_endpoint_reports_backend_status(monkeypatch) -> None:

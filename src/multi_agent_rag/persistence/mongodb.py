@@ -14,6 +14,7 @@ from bson.errors import InvalidId
 from pymongo import MongoClient
 from pymongo.collection import Collection
 from pymongo.database import Database
+from pymongo.errors import DuplicateKeyError
 
 from multi_agent_rag.models import Chunk
 from multi_agent_rag.persistence.models import (
@@ -23,6 +24,7 @@ from multi_agent_rag.persistence.models import (
     DocumentRecord,
     DocumentStatus,
     KnowledgeSpaceRecord,
+    UserRecord,
 )
 
 
@@ -112,6 +114,47 @@ class KnowledgeSpaceRepository:
 
     def count(self) -> int:
         return int(self.collection.count_documents({}))
+
+
+class UserRepository:
+    """Persist registered users and enforce unique normalized emails."""
+
+    def __init__(self, collection: Collection[dict[str, Any]]) -> None:
+        self.collection = collection
+
+    @classmethod
+    def from_store(cls, store: MongoStore) -> "UserRepository":
+        return cls(store.collection("users"))
+
+    def create(self, email: str, display_name: str, password_hash: str) -> UserRecord:
+        normalized_email = email.strip().lower()
+        normalized_name = display_name.strip()
+        if not normalized_email or not normalized_name or not password_hash:
+            raise ValueError("Email, display name, and password hash are required.")
+        now = utc_now()
+        payload: dict[str, Any] = {
+            "_id": str(uuid4()),
+            "email": normalized_email,
+            "display_name": normalized_name,
+            "password_hash": password_hash,
+            "active": True,
+            "created_at": now,
+            "updated_at": now,
+        }
+        self.collection.create_index("email", unique=True)
+        try:
+            self.collection.insert_one(payload)
+        except DuplicateKeyError as exc:
+            raise ValueError("A user with this email already exists.") from exc
+        return _user_record(payload)
+
+    def get(self, user_id: str) -> UserRecord | None:
+        user = self.collection.find_one({"_id": user_id})
+        return _user_record(user) if user else None
+
+    def get_by_email(self, email: str) -> UserRecord | None:
+        user = self.collection.find_one({"email": email.strip().lower()})
+        return _user_record(user) if user else None
 
 
 class DocumentRepository:
@@ -502,6 +545,18 @@ def _knowledge_space_record(space: dict[str, Any]) -> KnowledgeSpaceRecord:
         description=str(space.get("description") or ""),
         created_at=space["created_at"],
         updated_at=space["updated_at"],
+    )
+
+
+def _user_record(user: dict[str, Any]) -> UserRecord:
+    return UserRecord(
+        user_id=str(user["_id"]),
+        email=str(user["email"]),
+        display_name=str(user["display_name"]),
+        password_hash=str(user["password_hash"]),
+        active=bool(user.get("active", True)),
+        created_at=user["created_at"],
+        updated_at=user["updated_at"],
     )
 
 

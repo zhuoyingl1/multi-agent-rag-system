@@ -7,6 +7,7 @@ from multi_agent_rag.persistence.models import (
     DocumentRecord,
     DocumentStatus,
     KnowledgeSpaceRecord,
+    UserRecord,
 )
 from multi_agent_rag.persistence.mongodb import (
     ChunkRepository,
@@ -15,6 +16,7 @@ from multi_agent_rag.persistence.mongodb import (
     KnowledgeSpaceRepository,
     MongoSettings,
     MongoStore,
+    UserRepository,
 )
 
 __all__ = [
@@ -30,4 +32,6 @@ __all__ = [
     "KnowledgeSpaceRepository",
     "MongoSettings",
     "MongoStore",
+    "UserRecord",
+    "UserRepository",
 ]

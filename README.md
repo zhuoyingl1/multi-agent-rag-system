@@ -34,6 +34,7 @@ The application now supports persistent, versioned document indexing across Mong
 - In-memory metrics registry for local observability
 - Deployment liveness and concurrent dependency readiness probes
 - Configurable local or Redis/Celery document task dispatch with live worker readiness
+- Optional JWT API authentication with scrypt password hashing and MongoDB user accounts
 - Next.js console for query, streaming, metrics, and source inspection
 - SSE workflow events with progressive answer delta rendering
 - Local evaluation runner with JSON cases and JSON report export
@@ -108,6 +109,16 @@ In a separate terminal:
 $env:DOCUMENT_TASK_BACKEND = "celery"
 python -m uvicorn multi_agent_rag.api.main:app --reload --app-dir src
 ```
+
+Enable API authentication with a private secret of at least 32 characters:
+
+```powershell
+$env:AUTH_REQUIRED = "true"
+$env:JWT_SECRET = "replace-with-a-long-random-production-secret"
+python -m uvicorn multi_agent_rag.api.main:app --reload --app-dir src
+```
+
+Register with `POST /auth/register`, obtain a new token with `POST /auth/token`, and verify it with `GET /auth/me`. In the API documentation, use the `Authorize` control and enter the access token before calling protected endpoints. Set `AUTH_ALLOW_REGISTRATION=false` after provisioning users when public registration is not desired.
 
 Enable local LLM answer composition with Ollama for CLI demos:
 

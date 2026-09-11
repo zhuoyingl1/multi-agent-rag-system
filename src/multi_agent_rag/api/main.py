@@ -15,11 +15,24 @@ from time import monotonic, perf_counter, sleep
 from typing import Any, cast
 from uuid import uuid4
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
+from multi_agent_rag.auth import (
+    AuthenticationConfigurationError,
+    AuthenticationError,
+    authentication_required,
+    decode_access_token,
+    hash_password,
+    issue_access_token,
+    normalize_email,
+    registration_enabled,
+    validate_authentication_configuration,
+    verify_password,
+)
 from multi_agent_rag.citations import build_citation_diagnostics, build_source_locator, citation_id, source_locator
 from multi_agent_rag.conversation import contextualize_retrieval_query, recent_history
 from multi_agent_rag.documents import SUPPORTED_EXTENSIONS, load_document
@@ -48,6 +61,8 @@ from multi_agent_rag.persistence import (
     KnowledgeSpaceRecord,
     KnowledgeSpaceRepository,
     MongoStore,
+    UserRecord,
+    UserRepository,
 )
 from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.factory import (
@@ -61,6 +76,14 @@ DEFAULT_DOCUMENT_PATH = Path("examples/sample_docs.md")
 DEFAULT_EVAL_CASES_PATH = Path("examples/eval_cases.json")
 UPLOAD_DIR = Path("output/uploads")
 MONGO_STORE = MongoStore()
+AUTH_SCHEME = HTTPBearer(auto_error=False)
+PUBLIC_API_PATHS = {
+    "/auth/register",
+    "/auth/token",
+    "/health",
+    "/health/liveness",
+    "/health/readiness",
+}
 
 
 class QueryRequest(BaseModel):
@@ -83,6 +106,38 @@ class EvaluationRequest(BaseModel):
     cases_path: str = Field(default=str(DEFAULT_EVAL_CASES_PATH), min_length=1)
     orchestrator: str = Field(default="auto", pattern="^(auto|local|langgraph)$")
     retrieval_backend: str = Field(default="qdrant", pattern="^(local|qdrant)$")
+
+
+class UserRegistrationRequest(BaseModel):
+    """Create a registered user and an initial access token."""
+
+    email: str = Field(min_length=3, max_length=254)
+    display_name: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class UserLoginRequest(BaseModel):
+    """Exchange valid user credentials for an access token."""
+
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class AuthenticatedUserResponse(BaseModel):
+    """Public user identity returned by authentication endpoints."""
+
+    user_id: str
+    email: str
+    display_name: str
+
+
+class AccessTokenResponse(BaseModel):
+    """Bearer access token and its associated public user identity."""
+
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: AuthenticatedUserResponse
 
 
 class UploadResponse(BaseModel):
@@ -211,8 +266,41 @@ class DocumentUpdateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
 
 
+def authenticate_api_request(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(AUTH_SCHEME),
+) -> UserRecord | None:
+    """Resolve an optional bearer identity and enforce production auth mode."""
+
+    if request.url.path in PUBLIC_API_PATHS:
+        request.state.user = None
+        return None
+    if credentials is None:
+        if authentication_required():
+            raise _unauthorized("Authentication credentials are required.")
+        request.state.user = None
+        return None
+    try:
+        claims = decode_access_token(credentials.credentials)
+        user = UserRepository.from_store(MONGO_STORE).get(claims.user_id)
+    except AuthenticationConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except AuthenticationError as exc:
+        raise _unauthorized(str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Authentication service is unavailable.") from exc
+    if user is None or not user.active:
+        raise _unauthorized("Access token user is unavailable.")
+    request.state.user = user
+    return user
+
+
 def build_app() -> FastAPI:
-    app = FastAPI(title="Multi-Agent RAG System V2", version="0.1.0")
+    app = FastAPI(
+        title="Multi-Agent RAG System V2",
+        version="0.1.0",
+        dependencies=[Depends(authenticate_api_request)],
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
@@ -226,7 +314,7 @@ def build_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    @app.get("/health")
+    @app.get("/health", openapi_extra={"security": []})
     def health() -> dict[str, Any]:
         return {
             "status": "healthy",
@@ -247,6 +335,47 @@ def build_app() -> FastAPI:
     def health_task_queue() -> JSONResponse:
         status = check_task_queue()
         return JSONResponse(status_code=200 if status.ready else 503, content=status.to_dict())
+
+    @app.post("/auth/register", openapi_extra={"security": []})
+    def register_user(request: UserRegistrationRequest) -> dict[str, Any]:
+        if not registration_enabled():
+            raise HTTPException(status_code=403, detail="User registration is disabled.")
+        try:
+            validate_authentication_configuration()
+            user = UserRepository.from_store(MONGO_STORE).create(
+                normalize_email(request.email),
+                request.display_name,
+                hash_password(request.password),
+            )
+            return access_token_response(user).model_dump()
+        except AuthenticationConfigurationError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except AuthenticationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
+            status_code = 409 if "already exists" in str(exc).lower() else 400
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Authentication service is unavailable.") from exc
+
+    @app.post("/auth/token", openapi_extra={"security": []})
+    def login_user(request: UserLoginRequest) -> dict[str, Any]:
+        try:
+            validate_authentication_configuration()
+            user = UserRepository.from_store(MONGO_STORE).get_by_email(normalize_email(request.email))
+        except AuthenticationConfigurationError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except AuthenticationError as exc:
+            raise _unauthorized("Email or password is incorrect.") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Authentication service is unavailable.") from exc
+        if user is None or not user.active or not verify_password(request.password, user.password_hash):
+            raise _unauthorized("Email or password is incorrect.")
+        return access_token_response(user).model_dump()
+
+    @app.get("/auth/me")
+    def authenticated_user(request: Request) -> dict[str, Any]:
+        return user_response(require_request_user(request)).model_dump()
 
     @app.post("/knowledge-spaces")
     def create_knowledge_space(request: KnowledgeSpaceCreateRequest) -> dict[str, Any]:
@@ -518,11 +647,11 @@ def build_app() -> FastAPI:
             "limit": limit,
         }
 
-    @app.get("/health/liveness")
+    @app.get("/health/liveness", openapi_extra={"security": []})
     def health_liveness() -> dict[str, str]:
         return {"status": "alive"}
 
-    @app.get("/health/readiness")
+    @app.get("/health/readiness", openapi_extra={"security": []})
     def health_readiness() -> JSONResponse:
         report = check_readiness()
         return JSONResponse(status_code=200 if report.ready else 503, content=report.to_dict())
@@ -619,7 +748,51 @@ def build_app() -> FastAPI:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    generated_openapi = app.openapi
+
+    def openapi_schema() -> dict[str, Any]:
+        schema = generated_openapi()
+        for path in PUBLIC_API_PATHS:
+            path_item = schema.get("paths", {}).get(path, {})
+            for operation in path_item.values():
+                if isinstance(operation, dict) and "responses" in operation:
+                    operation["security"] = []
+        return schema
+
+    app.openapi = openapi_schema
     return app
+
+
+def access_token_response(user: UserRecord) -> AccessTokenResponse:
+    token, expires_in = issue_access_token(user)
+    return AccessTokenResponse(
+        access_token=token,
+        expires_in=expires_in,
+        user=user_response(user),
+    )
+
+
+def user_response(user: UserRecord) -> AuthenticatedUserResponse:
+    return AuthenticatedUserResponse(
+        user_id=user.user_id,
+        email=user.email,
+        display_name=user.display_name,
+    )
+
+
+def require_request_user(request: Request) -> UserRecord:
+    user = getattr(request.state, "user", None)
+    if not isinstance(user, UserRecord):
+        raise _unauthorized("Authentication credentials are required.")
+    return user
+
+
+def _unauthorized(detail: str) -> HTTPException:
+    return HTTPException(
+        status_code=401,
+        detail=detail,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 def run_query_request(

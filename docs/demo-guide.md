@@ -18,6 +18,7 @@ This guide summarizes the runnable demo paths and expected outputs for the Multi
 - Live Ollama service and model readiness checks for web demos
 - FastAPI query, streaming, health, metrics, integration readiness, and evaluation endpoints
 - Redis/Celery document ingestion with a local background-task development mode
+- Optional JWT API authentication backed by MongoDB user accounts
 - Next.js console for document queries, streaming answers, sources, metrics, integrations, and evaluation
 - Deterministic evaluation runner for local regression testing
 
@@ -255,6 +256,9 @@ Useful endpoints:
 - `GET /health/liveness`
 - `GET /health/readiness`
 - `GET /health/task-queue`
+- `POST /auth/register`
+- `POST /auth/token`
+- `GET /auth/me`
 - `POST /documents/upload`
 - `POST /query`
 - `POST /query/stream`

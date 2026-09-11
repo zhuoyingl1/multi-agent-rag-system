@@ -17,6 +17,19 @@ class DocumentStatus(str, Enum):
 
 
 @dataclass(frozen=True)
+class UserRecord:
+    """A registered API user with a one-way password hash."""
+
+    user_id: str
+    email: str
+    display_name: str
+    password_hash: str
+    active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
 class KnowledgeSpaceRecord:
     """A named collection of documents used as one retrieval scope."""
 
