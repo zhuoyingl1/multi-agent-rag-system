@@ -1,10 +1,12 @@
 # Multi-Agent RAG System V2
 
+[![CI](https://github.com/zhuoyingl1/multi-agent-rag-system/actions/workflows/ci.yml/badge.svg)](https://github.com/zhuoyingl1/multi-agent-rag-system/actions/workflows/ci.yml)
+
 A clean, from-scratch multi-agent RAG prototype built as a step-by-step learning and portfolio project.
 
 ## Current Status
 
-The application now supports persistent, versioned document indexing across MongoDB, Qdrant, and Neo4j, durable Redis/Celery ingestion jobs, and grounded multi-turn answers through Ollama.
+The application now supports persistent, versioned document indexing across MongoDB, Qdrant, and Neo4j, durable Redis/Celery ingestion jobs, grounded multi-turn answers through Ollama, full-stack containers, and automated CI checks.
 
 ## Implemented Capabilities
 
@@ -71,10 +73,12 @@ The application now supports persistent, versioned document indexing across Mong
 - Token-level Ollama answer streaming over SSE
 - Source citations with page, line, row, section, and JSON-path locators
 - GitHub-flavored Markdown answers with clickable source citations
+- Full-stack Docker Compose deployment with service health checks and shared worker storage
+- GitHub Actions checks for backend tests, frontend builds, and container configuration
 
 ## Planned Capabilities
 
-- Larger benchmark coverage and deployment automation
+- Larger benchmark coverage and managed deployment templates
 
 ## Quick Start
 
