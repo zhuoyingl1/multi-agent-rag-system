@@ -61,6 +61,7 @@ from multi_agent_rag.persistence import (
     KnowledgeSpaceRecord,
     KnowledgeSpaceRepository,
     MongoStore,
+    RuntimeSettingsRepository,
     UserRecord,
     UserRepository,
 )
@@ -70,7 +71,12 @@ from multi_agent_rag.retrieval.factory import (
     create_document_scope_retriever,
     create_retriever,
 )
-from multi_agent_rag.runtime_config import RuntimeSettings, RuntimeSettingsSnapshot, RuntimeSettingsStore
+from multi_agent_rag.runtime_config import (
+    RuntimeSettings,
+    RuntimeSettingsConflictError,
+    RuntimeSettingsSnapshot,
+    RuntimeSettingsStore,
+)
 from multi_agent_rag.task_queue import DocumentTaskDispatchError, check_task_queue, dispatch_document_task
 
 DEFAULT_DOCUMENT_PATH = Path("examples/sample_docs.md")
@@ -148,9 +154,10 @@ class RuntimeSettingsValues(BaseModel):
 
 
 class RuntimeSettingsResponse(BaseModel):
-    """Current runtime settings and process-local revision metadata."""
+    """Current runtime settings and revision metadata."""
 
-    scope: str = "process"
+    scope: str
+    backend: str
     source: str
     revision: int
     updated_at: datetime | None
@@ -344,8 +351,19 @@ def authenticate_api_request(
     return user
 
 
+def create_runtime_settings_store() -> RuntimeSettingsStore:
+    backend = (os.getenv("RUNTIME_SETTINGS_BACKEND") or "memory").strip().lower()
+    if backend == "memory":
+        return RuntimeSettingsStore()
+    if backend == "mongodb":
+        ttl_seconds = float(os.getenv("RUNTIME_SETTINGS_CACHE_TTL_SECONDS") or "10")
+        repository = RuntimeSettingsRepository.from_store(MONGO_STORE)
+        return RuntimeSettingsStore(persistence=repository, cache_ttl_seconds=ttl_seconds)
+    raise ValueError("RUNTIME_SETTINGS_BACKEND must be 'memory' or 'mongodb'.")
+
+
 def build_app(runtime_settings_store: RuntimeSettingsStore | None = None) -> FastAPI:
-    settings_store = runtime_settings_store or RuntimeSettingsStore()
+    settings_store = runtime_settings_store or create_runtime_settings_store()
     app = FastAPI(
         title="Multi-Agent RAG System V2",
         version="0.1.0",
@@ -388,15 +406,22 @@ def build_app(runtime_settings_store: RuntimeSettingsStore | None = None) -> Fas
 
     @app.get("/settings/runtime", response_model=RuntimeSettingsResponse)
     def get_runtime_settings() -> RuntimeSettingsResponse:
-        return runtime_settings_response(settings_store.snapshot())
+        try:
+            return runtime_settings_response(settings_store.snapshot(), settings_store)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Runtime settings persistence is unavailable.") from exc
 
     @app.put("/settings/runtime", response_model=RuntimeSettingsResponse)
     def update_runtime_settings(request: RuntimeSettingsUpdateRequest) -> RuntimeSettingsResponse:
         try:
             snapshot = settings_store.update(request.model_dump(exclude_none=True))
+        except RuntimeSettingsConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return runtime_settings_response(snapshot)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Runtime settings persistence is unavailable.") from exc
+        return runtime_settings_response(snapshot, settings_store)
 
     @app.post("/auth/register", openapi_extra={"security": []})
     def register_user(request: UserRegistrationRequest) -> dict[str, Any]:
@@ -887,8 +912,13 @@ def access_token_response(user: UserRecord) -> AccessTokenResponse:
     )
 
 
-def runtime_settings_response(snapshot: RuntimeSettingsSnapshot) -> RuntimeSettingsResponse:
+def runtime_settings_response(
+    snapshot: RuntimeSettingsSnapshot,
+    store: RuntimeSettingsStore,
+) -> RuntimeSettingsResponse:
     return RuntimeSettingsResponse(
+        scope=store.scope,
+        backend=store.backend,
         source=snapshot.source,
         revision=snapshot.revision,
         updated_at=snapshot.updated_at,

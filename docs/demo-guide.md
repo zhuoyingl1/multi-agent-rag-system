@@ -307,7 +307,7 @@ Sample runtime settings update:
 }
 ```
 
-Send the payload to `PUT /settings/runtime`, then call `GET /settings/runtime` to confirm the new revision. Updates affect only requests that start after the update. The endpoint rejects unknown fields and does not accept credentials, service URLs, or model names. Settings return to environment defaults when the API process restarts.
+Send the payload to `PUT /settings/runtime`, then call `GET /settings/runtime` to confirm the new revision. Updates affect only requests that start after the update. The endpoint rejects unknown fields and does not accept credentials, service URLs, or model names. The response reports `backend: memory` and `scope: process` for the default local setup. Docker Compose reports `backend: mongodb` and `scope: shared`; those settings survive API restarts and other API processes observe them after `RUNTIME_SETTINGS_CACHE_TTL_SECONDS`.
 
 Sample `/evaluate` request:
 
@@ -367,4 +367,4 @@ Demo checks:
 - Ollama answer composition requires a running local Ollama service and an available model.
 - PDF ingestion depends on extractable text and does not perform OCR.
 - The deterministic judge uses lexical overlap and should be replaced or augmented with an LLM judge for production evaluation.
-- Runtime settings are process-scoped and are not yet synchronized across multiple API workers.
+- Direct local API runs use process-scoped runtime settings unless `RUNTIME_SETTINGS_BACKEND=mongodb` is configured.

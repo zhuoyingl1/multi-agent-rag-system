@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
 from bson import ObjectId
 
 from multi_agent_rag.models import Chunk, ChunkType
@@ -14,8 +15,10 @@ from multi_agent_rag.persistence import (
     DocumentStatus,
     KnowledgeSpaceRepository,
     MongoSettings,
+    RuntimeSettingsRepository,
     UserRepository,
 )
+from multi_agent_rag.runtime_config import RuntimeSettings, RuntimeSettingsConflictError
 
 
 class FakeCursor:
@@ -47,6 +50,56 @@ def test_mongo_settings_load_from_environment(monkeypatch) -> None:
     assert settings.uri == "mongodb://database:27017"
     assert settings.database == "rag_test"
     assert settings.server_selection_timeout_ms == 1500
+
+
+def test_runtime_settings_repository_loads_and_inserts_versioned_settings() -> None:
+    collection = MagicMock()
+    now = datetime.now(UTC)
+    collection.find_one.return_value = {
+        "_id": "global",
+        "settings": RuntimeSettings(top_k=7).to_dict(),
+        "revision": 3,
+        "updated_at": now,
+    }
+    repository = RuntimeSettingsRepository(collection)
+
+    loaded = repository.load()
+    inserted = repository.save(RuntimeSettings(top_k=8), 0)
+
+    assert loaded is not None
+    assert loaded.settings.top_k == 7
+    assert loaded.revision == 3
+    assert inserted.revision == 1
+    assert inserted.settings.top_k == 8
+    payload = collection.insert_one.call_args.args[0]
+    assert payload["_id"] == "global"
+    assert payload["revision"] == 1
+
+
+def test_runtime_settings_repository_updates_expected_revision() -> None:
+    collection = MagicMock()
+    collection.find_one_and_update.return_value = {
+        "_id": "global",
+        "settings": RuntimeSettings(top_k=9).to_dict(),
+        "revision": 5,
+        "updated_at": datetime.now(UTC),
+    }
+
+    updated = RuntimeSettingsRepository(collection).save(RuntimeSettings(top_k=9), 4)
+
+    assert updated.revision == 5
+    settings_filter = collection.find_one_and_update.call_args.args[0]
+    settings_update = collection.find_one_and_update.call_args.args[1]
+    assert settings_filter == {"_id": "global", "revision": 4}
+    assert settings_update["$inc"] == {"revision": 1}
+
+
+def test_runtime_settings_repository_rejects_stale_revision() -> None:
+    collection = MagicMock()
+    collection.find_one_and_update.return_value = None
+
+    with pytest.raises(RuntimeSettingsConflictError, match="another API process"):
+        RuntimeSettingsRepository(collection).save(RuntimeSettings(top_k=9), 4)
 
 
 def test_document_repository_creates_processing_record() -> None:

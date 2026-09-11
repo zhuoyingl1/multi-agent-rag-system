@@ -75,7 +75,7 @@ The application now supports persistent, versioned document indexing across Mong
 - GitHub-flavored Markdown answers with clickable source citations
 - Full-stack Docker Compose deployment with service health checks and shared worker storage
 - GitHub Actions checks for backend tests, frontend builds, and container configuration
-- Process-scoped runtime settings API with atomic updates, strict ranges, and request-stable snapshots
+- Runtime settings API with MongoDB persistence, TTL caching, version checks, and request-stable snapshots
 
 ## Planned Capabilities
 
@@ -107,7 +107,7 @@ python -m multi_agent_rag retrieval-eval --retrieval-backend local --top-k 5 --m
 
 Both commands accept `--max-average-latency-ms` for controlled performance environments. Latency is reported but not enforced in shared CI because runner performance is variable. JSON reports include every configured quality-gate check, its threshold, actual value, and pass status.
 
-Runtime retrieval settings can be inspected with `GET /settings/runtime` and partially updated with `PUT /settings/runtime`. The API accepts only documented non-sensitive settings such as `top_k`, query rewriting, adaptive result selection, context budget, reranker candidate count, and RRF strength. Updates are atomic and affect new requests only. Secrets, service URLs, model names, and credentials remain environment-only configuration. Runtime updates are process-scoped and return to environment defaults when the API restarts.
+Runtime retrieval settings can be inspected with `GET /settings/runtime` and partially updated with `PUT /settings/runtime`. The API accepts only documented non-sensitive settings such as `top_k`, query rewriting, adaptive result selection, context budget, reranker candidate count, and RRF strength. Updates are atomic and affect new requests only. Secrets, service URLs, model names, and credentials remain environment-only configuration. Local runs default to the in-memory backend. Docker Compose enables the MongoDB backend, which persists settings across restarts, checks revisions to prevent stale writes, and refreshes each API process through a configurable TTL cache.
 
 Deployment probes are available at `GET /health/liveness` for process health and
 `GET /health/readiness` for live MongoDB, Qdrant, Neo4j, Ollama, and task queue readiness.

@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from bson import ObjectId
 from bson.errors import InvalidId
-from pymongo import MongoClient
+from pymongo import MongoClient, ReturnDocument
 from pymongo.collection import Collection
 from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError
@@ -25,6 +25,11 @@ from multi_agent_rag.persistence.models import (
     DocumentStatus,
     KnowledgeSpaceRecord,
     UserRecord,
+)
+from multi_agent_rag.runtime_config import (
+    RuntimeSettings,
+    RuntimeSettingsConflictError,
+    RuntimeSettingsSnapshot,
 )
 
 
@@ -77,6 +82,54 @@ class MongoStore:
             self._client.close()
         self._client = None
         self._database = None
+
+
+class RuntimeSettingsRepository:
+    """Persist one versioned runtime settings document."""
+
+    document_id = "global"
+
+    def __init__(self, collection: Collection[dict[str, Any]]) -> None:
+        self.collection = collection
+
+    @classmethod
+    def from_store(cls, store: MongoStore) -> "RuntimeSettingsRepository":
+        return cls(store.collection("runtime_settings"))
+
+    def load(self) -> RuntimeSettingsSnapshot | None:
+        document = self.collection.find_one({"_id": self.document_id})
+        return _runtime_settings_snapshot(document) if document else None
+
+    def save(self, settings: RuntimeSettings, expected_revision: int) -> RuntimeSettingsSnapshot:
+        now = utc_now()
+        if expected_revision == 0:
+            document = {
+                "_id": self.document_id,
+                "settings": settings.to_dict(),
+                "revision": 1,
+                "updated_at": now,
+            }
+            try:
+                self.collection.insert_one(document)
+            except DuplicateKeyError as exc:
+                raise RuntimeSettingsConflictError(
+                    "Runtime settings changed in another API process. Reload and retry."
+                ) from exc
+            return _runtime_settings_snapshot(document)
+
+        document = self.collection.find_one_and_update(
+            {"_id": self.document_id, "revision": expected_revision},
+            {
+                "$set": {"settings": settings.to_dict(), "updated_at": now},
+                "$inc": {"revision": 1},
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+        if document is None:
+            raise RuntimeSettingsConflictError(
+                "Runtime settings changed in another API process. Reload and retry."
+            )
+        return _runtime_settings_snapshot(document)
 
 
 class KnowledgeSpaceRepository:
@@ -612,6 +665,14 @@ def _object_id_filter(value: str, label: str) -> dict[str, ObjectId]:
 
 def _document_filter(document_id: str) -> dict[str, ObjectId]:
     return _object_id_filter(document_id, "document")
+
+
+def _runtime_settings_snapshot(document: dict[str, Any]) -> RuntimeSettingsSnapshot:
+    return RuntimeSettingsSnapshot(
+        settings=RuntimeSettings(**dict(document["settings"])),
+        revision=int(document["revision"]),
+        updated_at=document.get("updated_at"),
+    )
 
 
 def _knowledge_space_record(space: dict[str, Any]) -> KnowledgeSpaceRecord:

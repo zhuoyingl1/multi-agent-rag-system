@@ -11,7 +11,7 @@ pytest.importorskip("anyio")
 from fastapi.testclient import TestClient
 from docx import Document as WordDocument
 
-from multi_agent_rag.api.main import build_app, run_query
+from multi_agent_rag.api.main import build_app, create_runtime_settings_store, run_query
 from multi_agent_rag.auth import hash_password, issue_access_token
 from multi_agent_rag.health import DependencyStatus, ReadinessReport
 from multi_agent_rag.ingestion import (
@@ -113,6 +113,7 @@ def test_runtime_settings_endpoints_read_and_update_whitelisted_values() -> None
 
     assert initial.status_code == 200
     assert initial.json()["scope"] == "process"
+    assert initial.json()["backend"] == "memory"
     assert initial.json()["source"] == "environment"
     assert initial.json()["revision"] == 0
     assert updated.status_code == 200
@@ -121,6 +122,21 @@ def test_runtime_settings_endpoints_read_and_update_whitelisted_values() -> None
     assert updated.json()["settings"]["top_k"] == 7
     assert updated.json()["settings"]["query_rewrite_enabled"] is False
     assert current.json() == updated.json()
+
+
+def test_runtime_settings_store_factory_selects_mongodb(monkeypatch) -> None:
+    repository = MagicMock()
+    monkeypatch.setenv("RUNTIME_SETTINGS_BACKEND", "mongodb")
+    monkeypatch.setenv("RUNTIME_SETTINGS_CACHE_TTL_SECONDS", "2.5")
+    monkeypatch.setattr(
+        "multi_agent_rag.api.main.RuntimeSettingsRepository.from_store",
+        lambda _store: repository,
+    )
+
+    store = create_runtime_settings_store()
+
+    assert store.backend == "mongodb"
+    assert store.scope == "shared"
 
 
 def test_runtime_settings_endpoint_rejects_invalid_or_unknown_values() -> None:

@@ -6,7 +6,8 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 import os
 from threading import RLock
-from typing import Any
+from time import monotonic
+from typing import Any, Callable, Protocol
 
 
 @dataclass(frozen=True)
@@ -75,28 +76,91 @@ class RuntimeSettingsSnapshot:
         return "runtime" if self.revision else "environment"
 
 
-class RuntimeSettingsStore:
-    """Apply atomic runtime updates and provide request-stable snapshots."""
+class RuntimeSettingsConflictError(RuntimeError):
+    """Raised when another process updates the settings first."""
 
-    def __init__(self, settings: RuntimeSettings | None = None) -> None:
+
+class RuntimeSettingsPersistence(Protocol):
+    """Storage contract used by the runtime settings cache."""
+
+    def load(self) -> RuntimeSettingsSnapshot | None: ...
+
+    def save(self, settings: RuntimeSettings, expected_revision: int) -> RuntimeSettingsSnapshot: ...
+
+
+class RuntimeSettingsStore:
+    """Cache settings, apply atomic updates, and provide stable snapshots."""
+
+    def __init__(
+        self,
+        settings: RuntimeSettings | None = None,
+        *,
+        persistence: RuntimeSettingsPersistence | None = None,
+        cache_ttl_seconds: float = 10.0,
+        clock: Callable[[], float] = monotonic,
+    ) -> None:
+        if cache_ttl_seconds < 0:
+            raise ValueError("cache_ttl_seconds must not be negative.")
         self._lock = RLock()
         self._settings = settings or RuntimeSettings.from_env()
         self._revision = 0
         self._updated_at: datetime | None = None
+        self._persistence = persistence
+        self._cache_ttl_seconds = cache_ttl_seconds
+        self._clock = clock
+        self._last_refresh: float | None = None
+
+    @property
+    def backend(self) -> str:
+        return "mongodb" if self._persistence is not None else "memory"
+
+    @property
+    def scope(self) -> str:
+        return "shared" if self._persistence is not None else "process"
 
     def snapshot(self) -> RuntimeSettingsSnapshot:
         with self._lock:
-            return RuntimeSettingsSnapshot(self._settings, self._revision, self._updated_at)
+            self._refresh_locked()
+            return self._snapshot_locked()
 
     def update(self, changes: dict[str, Any]) -> RuntimeSettingsSnapshot:
         if not changes:
             return self.snapshot()
         with self._lock:
+            self._refresh_locked(force=True)
             updated = replace(self._settings, **changes)
+            if self._persistence is not None:
+                snapshot = self._persistence.save(updated, self._revision)
+                self._apply_snapshot_locked(snapshot)
+                self._last_refresh = self._clock()
+                return snapshot
             self._settings = updated
             self._revision += 1
             self._updated_at = datetime.now(UTC)
-            return RuntimeSettingsSnapshot(updated, self._revision, self._updated_at)
+            return self._snapshot_locked()
+
+    def _refresh_locked(self, *, force: bool = False) -> None:
+        if self._persistence is None:
+            return
+        now = self._clock()
+        cache_is_fresh = (
+            self._last_refresh is not None
+            and now - self._last_refresh < self._cache_ttl_seconds
+        )
+        if not force and cache_is_fresh:
+            return
+        snapshot = self._persistence.load()
+        if snapshot is not None and snapshot.revision >= self._revision:
+            self._apply_snapshot_locked(snapshot)
+        self._last_refresh = now
+
+    def _apply_snapshot_locked(self, snapshot: RuntimeSettingsSnapshot) -> None:
+        self._settings = snapshot.settings
+        self._revision = snapshot.revision
+        self._updated_at = snapshot.updated_at
+
+    def _snapshot_locked(self) -> RuntimeSettingsSnapshot:
+        return RuntimeSettingsSnapshot(self._settings, self._revision, self._updated_at)
 
 
 def _env_bool(name: str, default: bool) -> bool:

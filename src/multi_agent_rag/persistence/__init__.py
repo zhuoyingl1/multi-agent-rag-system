@@ -16,6 +16,7 @@ from multi_agent_rag.persistence.mongodb import (
     KnowledgeSpaceRepository,
     MongoSettings,
     MongoStore,
+    RuntimeSettingsRepository,
     UserRepository,
 )
 
@@ -32,6 +33,7 @@ __all__ = [
     "KnowledgeSpaceRepository",
     "MongoSettings",
     "MongoStore",
+    "RuntimeSettingsRepository",
     "UserRecord",
     "UserRepository",
 ]
