@@ -86,6 +86,10 @@ PUBLIC_API_PATHS = {
 }
 
 
+class DocumentQueryNotFoundError(LookupError):
+    """Raised when a query targets a missing or inaccessible document."""
+
+
 class QueryRequest(BaseModel):
     """API request for local document question answering."""
 
@@ -378,31 +382,34 @@ def build_app() -> FastAPI:
         return user_response(require_request_user(request)).model_dump()
 
     @app.post("/knowledge-spaces")
-    def create_knowledge_space(request: KnowledgeSpaceCreateRequest) -> dict[str, Any]:
+    def create_knowledge_space(request: KnowledgeSpaceCreateRequest, http_request: Request) -> dict[str, Any]:
+        owner_id = request_owner_id(http_request)
         repository = KnowledgeSpaceRepository.from_store(MONGO_STORE)
         try:
-            space = repository.create(request.name, request.description)
+            space = repository.create(request.name, request.description, owner_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return knowledge_space_response(space, 0).model_dump()
 
     @app.get("/knowledge-spaces")
     def list_knowledge_spaces(
+        http_request: Request,
         skip: int = Query(default=0, ge=0),
         limit: int = Query(default=50, ge=1, le=100),
     ) -> dict[str, Any]:
+        owner_id = request_owner_id(http_request)
         spaces = KnowledgeSpaceRepository.from_store(MONGO_STORE)
         documents = DocumentRepository.from_store(MONGO_STORE)
-        records = spaces.list(skip=skip, limit=limit)
+        records = spaces.list(skip=skip, limit=limit, owner_id=owner_id)
         return KnowledgeSpaceListResponse(
             knowledge_spaces=[
                 knowledge_space_response(
                     space,
-                    documents.count(knowledge_space_id=space.knowledge_space_id),
+                    documents.count(knowledge_space_id=space.knowledge_space_id, owner_id=owner_id),
                 )
                 for space in records
             ],
-            total=spaces.count(),
+            total=spaces.count(owner_id),
             skip=skip,
             limit=limit,
         ).model_dump()
@@ -410,33 +417,38 @@ def build_app() -> FastAPI:
     @app.post("/documents/upload")
     async def upload_document(
         background_tasks: BackgroundTasks,
+        http_request: Request,
         file: UploadFile = File(...),
         knowledge_space_id: str | None = Form(default=None),
     ) -> dict[str, Any]:
+        owner_id = request_owner_id(http_request)
         if knowledge_space_id is not None:
-            get_knowledge_space(knowledge_space_id)
+            get_knowledge_space(knowledge_space_id, owner_id)
         service = create_document_ingestion_service()
-        return (await save_uploaded_document(file, background_tasks, service, knowledge_space_id)).model_dump()
+        return (await save_uploaded_document(file, background_tasks, service, knowledge_space_id, owner_id)).model_dump()
 
     @app.get("/documents")
     def list_documents(
+        http_request: Request,
         skip: int = Query(default=0, ge=0),
         limit: int = Query(default=50, ge=1, le=100),
         status: DocumentStatus | None = Query(default=None),
         knowledge_space_id: str | None = Query(default=None),
     ) -> dict[str, Any]:
+        owner_id = request_owner_id(http_request)
         repository = DocumentRepository.from_store(MONGO_STORE)
         if knowledge_space_id is None:
-            documents = repository.list(skip=skip, limit=limit, status=status)
-            total = repository.count(status)
+            documents = repository.list(skip=skip, limit=limit, status=status, owner_id=owner_id)
+            total = repository.count(status, owner_id=owner_id)
         else:
             documents = repository.list(
                 skip=skip,
                 limit=limit,
                 status=status,
                 knowledge_space_id=knowledge_space_id,
+                owner_id=owner_id,
             )
-            total = repository.count(status, knowledge_space_id)
+            total = repository.count(status, knowledge_space_id, owner_id)
         return DocumentListResponse(
             documents=[document_status_payload(document) for document in documents],
             total=total,
@@ -445,28 +457,34 @@ def build_app() -> FastAPI:
         ).model_dump()
 
     @app.put("/documents/{document_id}/knowledge-space")
-    def update_document_knowledge_space(document_id: str, request: DocumentSpaceUpdateRequest) -> dict[str, Any]:
+    def update_document_knowledge_space(
+        document_id: str,
+        request: DocumentSpaceUpdateRequest,
+        http_request: Request,
+    ) -> dict[str, Any]:
+        owner_id = request_owner_id(http_request)
         if request.knowledge_space_id is not None:
-            get_knowledge_space(request.knowledge_space_id)
+            get_knowledge_space(request.knowledge_space_id, owner_id)
         repository = DocumentRepository.from_store(MONGO_STORE)
         try:
-            document = repository.get(document_id)
+            document = repository.get(document_id, owner_id)
             if document is None:
                 raise HTTPException(status_code=404, detail=f"Document not found: {document_id}")
-            repository.set_knowledge_space(document_id, request.knowledge_space_id)
-            updated = repository.get(document_id)
+            repository.set_knowledge_space(document_id, request.knowledge_space_id, owner_id)
+            updated = repository.get(document_id, owner_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return document_status_payload(updated or document).model_dump()
 
     @app.put("/documents/{document_id}")
-    def update_document(document_id: str, request: DocumentUpdateRequest) -> dict[str, Any]:
+    def update_document(document_id: str, request: DocumentUpdateRequest, http_request: Request) -> dict[str, Any]:
+        owner_id = request_owner_id(http_request)
         repository = DocumentRepository.from_store(MONGO_STORE)
         try:
-            updated = repository.update_title(document_id, request.title)
+            updated = repository.update_title(document_id, request.title, owner_id)
             if not updated:
                 raise HTTPException(status_code=404, detail=f"Document not found: {document_id}")
-            document = repository.get(document_id)
+            document = repository.get(document_id, owner_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if document is None:
@@ -474,23 +492,24 @@ def build_app() -> FastAPI:
         return document_status_payload(document).model_dump()
 
     @app.get("/documents/{document_id}")
-    def document_status(document_id: str) -> dict[str, Any]:
-        return document_status_payload(get_document_record(document_id)).model_dump()
+    def document_status(document_id: str, http_request: Request) -> dict[str, Any]:
+        return document_status_payload(get_document_record(document_id, request_owner_id(http_request))).model_dump()
 
     @app.get("/documents/{document_id}/progress")
-    def document_progress(document_id: str) -> dict[str, Any]:
-        return document_status_payload(get_document_record(document_id)).model_dump()
+    def document_progress(document_id: str, http_request: Request) -> dict[str, Any]:
+        return document_status_payload(get_document_record(document_id, request_owner_id(http_request))).model_dump()
 
     @app.get("/documents/{document_id}/progress/stream")
-    def document_progress_stream(document_id: str) -> StreamingResponse:
-        get_document_record(document_id)
+    def document_progress_stream(document_id: str, http_request: Request) -> StreamingResponse:
+        owner_id = request_owner_id(http_request)
+        get_document_record(document_id, owner_id)
 
         def events():
             interval = max(0.05, float(os.getenv("DOCUMENT_PROGRESS_POLL_SECONDS") or "0.5"))
             deadline = monotonic() + float(os.getenv("DOCUMENT_PROGRESS_TIMEOUT_SECONDS") or "300")
             last_state: tuple[object, ...] | None = None
             while monotonic() < deadline:
-                document = get_document_record(document_id)
+                document = get_document_record(document_id, owner_id)
                 payload = document_status_payload(document).model_dump(mode="json")
                 state = (
                     document.status.value,
@@ -523,13 +542,15 @@ def build_app() -> FastAPI:
     @app.get("/documents/{document_id}/chunks")
     def document_chunks(
         document_id: str,
+        http_request: Request,
         skip: int = Query(default=0, ge=0),
         limit: int = Query(default=20, ge=1, le=100),
         chunk_type: ChunkType | None = Query(default=None),
         q: str | None = Query(default=None, max_length=200),
     ) -> dict[str, Any]:
+        owner_id = request_owner_id(http_request)
         try:
-            document = DocumentRepository.from_store(MONGO_STORE).get(document_id)
+            document = DocumentRepository.from_store(MONGO_STORE).get(document_id, owner_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if document is None:
@@ -561,10 +582,14 @@ def build_app() -> FastAPI:
         ).model_dump()
 
     @app.post("/documents/{document_id}/reindex")
-    def reindex_document(document_id: str, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    def reindex_document(
+        document_id: str,
+        background_tasks: BackgroundTasks,
+        http_request: Request,
+    ) -> dict[str, Any]:
         service = create_document_ingestion_service()
         try:
-            document = service.prepare_reindex(document_id)
+            document = service.prepare_reindex(document_id, request_owner_id(http_request))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except KeyError as exc:
@@ -577,10 +602,14 @@ def build_app() -> FastAPI:
         return document_status_payload(document).model_dump()
 
     @app.post("/documents/{document_id}/retry")
-    def retry_document(document_id: str, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    def retry_document(
+        document_id: str,
+        background_tasks: BackgroundTasks,
+        http_request: Request,
+    ) -> dict[str, Any]:
         service = create_document_ingestion_service()
         try:
-            document = service.prepare_retry(document_id)
+            document = service.prepare_retry(document_id, request_owner_id(http_request))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except KeyError as exc:
@@ -593,10 +622,10 @@ def build_app() -> FastAPI:
         return document_status_payload(document).model_dump()
 
     @app.delete("/documents/{document_id}")
-    def delete_document(document_id: str) -> dict[str, Any]:
+    def delete_document(document_id: str, http_request: Request) -> dict[str, Any]:
         service = create_document_ingestion_service()
         try:
-            document = service.delete(document_id)
+            document = service.delete(document_id, request_owner_id(http_request))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except KeyError as exc:
@@ -612,34 +641,46 @@ def build_app() -> FastAPI:
         ).model_dump()
 
     @app.post("/conversations")
-    def create_conversation(request: ConversationCreateRequest) -> dict[str, Any]:
+    def create_conversation(request: ConversationCreateRequest, http_request: Request) -> dict[str, Any]:
+        owner_id = request_owner_id(http_request)
         validate_scope_selection(request.document_id, request.knowledge_space_id)
-        document = get_ready_document(request.document_id) if request.document_id else None
-        space = get_ready_knowledge_space(request.knowledge_space_id) if request.knowledge_space_id else None
+        document = get_ready_document(request.document_id, owner_id) if request.document_id else None
+        space = get_ready_knowledge_space(request.knowledge_space_id, owner_id) if request.knowledge_space_id else None
         title = request.title or (document.title if document else cast(KnowledgeSpaceRecord, space).name)
         repository = ConversationRepository.from_store(MONGO_STORE)
         conversation = (
-            repository.create(title=title, document_id=document.document_id)
+            repository.create(title=title, document_id=document.document_id, owner_id=owner_id)
             if document
-            else repository.create(title=title, knowledge_space_id=cast(KnowledgeSpaceRecord, space).knowledge_space_id)
+            else repository.create(
+                title=title,
+                knowledge_space_id=cast(KnowledgeSpaceRecord, space).knowledge_space_id,
+                owner_id=owner_id,
+            )
         )
         return conversation_payload(conversation)
 
     @app.get("/conversations")
     def list_conversations(
+        http_request: Request,
         skip: int = Query(default=0, ge=0),
         limit: int = Query(default=50, ge=1, le=100),
         document_id: str | None = Query(default=None),
         knowledge_space_id: str | None = Query(default=None),
     ) -> dict[str, Any]:
+        owner_id = request_owner_id(http_request)
         if document_id and knowledge_space_id:
             raise HTTPException(status_code=400, detail="Choose either document_id or knowledge_space_id, not both.")
+        if document_id:
+            get_document_record(document_id, owner_id)
+        if knowledge_space_id:
+            get_knowledge_space(knowledge_space_id, owner_id)
         repository = ConversationRepository.from_store(MONGO_STORE)
         conversations = repository.list(
             skip=skip,
             limit=limit,
             document_id=document_id,
             knowledge_space_id=knowledge_space_id,
+            owner_id=owner_id,
         )
         return {
             "conversations": [conversation_summary_payload(conversation) for conversation in conversations],
@@ -657,35 +698,45 @@ def build_app() -> FastAPI:
         return JSONResponse(status_code=200 if report.ready else 503, content=report.to_dict())
 
     @app.get("/conversations/{conversation_id}")
-    def get_conversation(conversation_id: str) -> dict[str, Any]:
-        conversation = ConversationRepository.from_store(MONGO_STORE).get(conversation_id)
+    def get_conversation(conversation_id: str, http_request: Request) -> dict[str, Any]:
+        conversation = ConversationRepository.from_store(MONGO_STORE).get(
+            conversation_id,
+            request_owner_id(http_request),
+        )
         if conversation is None:
             raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")
         return conversation_payload(conversation)
 
     @app.delete("/conversations/{conversation_id}")
-    def delete_conversation(conversation_id: str) -> dict[str, Any]:
+    def delete_conversation(conversation_id: str, http_request: Request) -> dict[str, Any]:
         repository = ConversationRepository.from_store(MONGO_STORE)
-        if not repository.delete(conversation_id):
+        if not repository.delete(conversation_id, request_owner_id(http_request)):
             raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")
         return {"conversation_id": conversation_id, "deleted": True}
 
     @app.put("/conversations/{conversation_id}")
-    def update_conversation(conversation_id: str, request: ConversationUpdateRequest) -> dict[str, Any]:
+    def update_conversation(
+        conversation_id: str,
+        request: ConversationUpdateRequest,
+        http_request: Request,
+    ) -> dict[str, Any]:
+        owner_id = request_owner_id(http_request)
         repository = ConversationRepository.from_store(MONGO_STORE)
         try:
-            updated = repository.update_title(conversation_id, request.title)
+            updated = repository.update_title(conversation_id, request.title, owner_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not updated:
             raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")
-        conversation = repository.get(conversation_id)
+        conversation = repository.get(conversation_id, owner_id)
         if conversation is None:
             raise HTTPException(status_code=404, detail=f"Conversation not found: {conversation_id}")
         return conversation_summary_payload(conversation)
 
     @app.post("/evaluate")
-    def evaluate(request: EvaluationRequest) -> dict[str, Any]:
+    def evaluate(request: EvaluationRequest, http_request: Request) -> dict[str, Any]:
+        if request_owner_id(http_request) is not None:
+            raise HTTPException(status_code=403, detail="Local path evaluation is unavailable for authenticated users.")
         return safe_run_evaluation(
             Path(request.document_path),
             Path(request.cases_path),
@@ -694,13 +745,14 @@ def build_app() -> FastAPI:
         ).to_dict()
 
     @app.post("/query")
-    def query(request: QueryRequest) -> dict[str, Any]:
-        result = run_query_request(request)
+    def query(request: QueryRequest, http_request: Request) -> dict[str, Any]:
+        result = run_query_request(request, owner_id=request_owner_id(http_request))
         metrics_registry.record_run(result.metrics)
         return workflow_payload(result)
 
     @app.post("/query/stream")
-    def query_stream(request: QueryRequest) -> StreamingResponse:
+    def query_stream(request: QueryRequest, http_request: Request) -> StreamingResponse:
+        owner_id = request_owner_id(http_request)
         validate_query_source(request)
 
         def events():
@@ -720,7 +772,7 @@ def build_app() -> FastAPI:
 
             def run_workflow() -> None:
                 try:
-                    result = run_query_request(request, on_stage, on_answer_delta)
+                    result = run_query_request(request, on_stage, on_answer_delta, owner_id)
                     result.metrics["streaming_mode"] = "token" if result.metrics["answer_type"] == "llm" else "complete"
                     result.metrics["time_to_first_token_ms"] = (
                         first_delta_ms if first_delta_ms is not None else result.metrics["latency_ms"]
@@ -787,6 +839,11 @@ def require_request_user(request: Request) -> UserRecord:
     return user
 
 
+def request_owner_id(request: Request) -> str | None:
+    user = getattr(request.state, "user", None)
+    return user.user_id if isinstance(user, UserRecord) else None
+
+
 def _unauthorized(detail: str) -> HTTPException:
     return HTTPException(
         status_code=401,
@@ -799,10 +856,13 @@ def run_query_request(
     request: QueryRequest,
     on_stage: Callable[[str, object], None] | None = None,
     on_answer_delta: Callable[[str], None] | None = None,
+    owner_id: str | None = None,
 ) -> WorkflowResult:
     if request.document_id and request.knowledge_space_id:
         raise HTTPException(status_code=400, detail="Choose either document_id or knowledge_space_id, not both.")
-    history, retrieval_query, conversations = conversation_context(request)
+    if owner_id is not None and not request.document_id and not request.knowledge_space_id:
+        raise HTTPException(status_code=403, detail="Authenticated queries must use a registered document or knowledge space.")
+    history, retrieval_query, conversations = conversation_context(request, owner_id)
     if request.knowledge_space_id:
         result = safe_run_knowledge_space_query(
             request.query,
@@ -813,6 +873,7 @@ def run_query_request(
             on_answer_delta,
             retrieval_query,
             history,
+            owner_id,
         )
     elif request.document_id:
         result = safe_run_document_query(
@@ -824,6 +885,7 @@ def run_query_request(
             on_answer_delta,
             retrieval_query,
             history,
+            owner_id,
         )
     else:
         result = safe_run_query(
@@ -846,6 +908,7 @@ def run_query_request(
                 "answer_type": result.metrics.get("answer_type", "unknown"),
                 "citation_status": result.metrics.get("citation_status", "unknown"),
             },
+            owner_id=owner_id,
         )
     return result
 
@@ -886,10 +949,11 @@ def run_document_query(
     on_answer_delta: Callable[[str], None] | None = None,
     retrieval_query: str | None = None,
     conversation_history: list[dict[str, str]] | None = None,
+    owner_id: str | None = None,
 ) -> WorkflowResult:
-    document = DocumentRepository.from_store(MONGO_STORE).get(document_id)
+    document = DocumentRepository.from_store(MONGO_STORE).get(document_id, owner_id)
     if document is None:
-        raise ValueError(f"Document not found: {document_id}")
+        raise DocumentQueryNotFoundError(f"Document not found: {document_id}")
     if document.status is not DocumentStatus.COMPLETED:
         raise RuntimeError(f"Document is not ready for queries: {document.status.value}")
     if document_index_is_stale(document, configured_embedding_model()):
@@ -918,8 +982,9 @@ def run_knowledge_space_query(
     on_answer_delta: Callable[[str], None] | None = None,
     retrieval_query: str | None = None,
     conversation_history: list[dict[str, str]] | None = None,
+    owner_id: str | None = None,
 ) -> WorkflowResult:
-    documents = get_ready_knowledge_space_documents(knowledge_space_id)
+    documents = get_ready_knowledge_space_documents(knowledge_space_id, owner_id)
     retriever = create_document_scope_retriever([document.document_id for document in documents])
     try:
         return create_workflow(
@@ -943,6 +1008,7 @@ async def save_uploaded_document(
     background_tasks: BackgroundTasks,
     service: DocumentIngestionService,
     knowledge_space_id: str | None = None,
+    owner_id: str | None = None,
 ) -> UploadResponse:
     filename = Path(file.filename or "").name
     if not filename:
@@ -969,6 +1035,7 @@ async def save_uploaded_document(
         file_hash=sha256(content).hexdigest(),
         metadata={"content_type": file.content_type},
         knowledge_space_id=knowledge_space_id,
+        owner_id=owner_id,
     )
     document = registered.document
     if registered.duplicate:
@@ -1040,9 +1107,9 @@ def knowledge_space_response(space: KnowledgeSpaceRecord, document_count: int) -
     )
 
 
-def get_knowledge_space(knowledge_space_id: str) -> KnowledgeSpaceRecord:
+def get_knowledge_space(knowledge_space_id: str, owner_id: str | None = None) -> KnowledgeSpaceRecord:
     try:
-        space = KnowledgeSpaceRepository.from_store(MONGO_STORE).get(knowledge_space_id)
+        space = KnowledgeSpaceRepository.from_store(MONGO_STORE).get(knowledge_space_id, owner_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if space is None:
@@ -1050,18 +1117,22 @@ def get_knowledge_space(knowledge_space_id: str) -> KnowledgeSpaceRecord:
     return space
 
 
-def get_ready_knowledge_space(knowledge_space_id: str) -> KnowledgeSpaceRecord:
-    space = get_knowledge_space(knowledge_space_id)
-    get_ready_knowledge_space_documents(knowledge_space_id)
+def get_ready_knowledge_space(knowledge_space_id: str, owner_id: str | None = None) -> KnowledgeSpaceRecord:
+    space = get_knowledge_space(knowledge_space_id, owner_id)
+    get_ready_knowledge_space_documents(knowledge_space_id, owner_id)
     return space
 
 
-def get_ready_knowledge_space_documents(knowledge_space_id: str) -> list[DocumentRecord]:
-    get_knowledge_space(knowledge_space_id)
+def get_ready_knowledge_space_documents(
+    knowledge_space_id: str,
+    owner_id: str | None = None,
+) -> list[DocumentRecord]:
+    get_knowledge_space(knowledge_space_id, owner_id)
     documents = DocumentRepository.from_store(MONGO_STORE).list(
         limit=100,
         status=DocumentStatus.COMPLETED,
         knowledge_space_id=knowledge_space_id,
+        owner_id=owner_id,
     )
     ready = [
         document
@@ -1082,9 +1153,9 @@ def configured_embedding_model() -> str:
     return os.getenv("OLLAMA_EMBEDDING_MODEL") or "nomic-embed-text"
 
 
-def get_document_record(document_id: str) -> DocumentRecord:
+def get_document_record(document_id: str, owner_id: str | None = None) -> DocumentRecord:
     try:
-        document = DocumentRepository.from_store(MONGO_STORE).get(document_id)
+        document = DocumentRepository.from_store(MONGO_STORE).get(document_id, owner_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if document is None:
@@ -1092,8 +1163,8 @@ def get_document_record(document_id: str) -> DocumentRecord:
     return document
 
 
-def get_ready_document(document_id: str) -> DocumentRecord:
-    document = get_document_record(document_id)
+def get_ready_document(document_id: str, owner_id: str | None = None) -> DocumentRecord:
+    document = get_document_record(document_id, owner_id)
     if document.status is not DocumentStatus.COMPLETED:
         raise HTTPException(status_code=400, detail=f"Document is not ready for queries: {document.status.value}")
     if document_index_is_stale(document, configured_embedding_model()):
@@ -1103,13 +1174,14 @@ def get_ready_document(document_id: str) -> DocumentRecord:
 
 def conversation_context(
     request: QueryRequest,
+    owner_id: str | None = None,
 ) -> tuple[list[dict[str, str]], str, ConversationRepository | None]:
     if request.conversation_id is None:
         return [], request.query, None
     validate_scope_selection(request.document_id, request.knowledge_space_id)
 
     repository = ConversationRepository.from_store(MONGO_STORE)
-    conversation = repository.get(request.conversation_id)
+    conversation = repository.get(request.conversation_id, owner_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail=f"Conversation not found: {request.conversation_id}")
     if conversation.document_id != request.document_id or conversation.knowledge_space_id != request.knowledge_space_id:
@@ -1194,6 +1266,7 @@ def safe_run_document_query(
     on_answer_delta: Callable[[str], None] | None = None,
     retrieval_query: str | None = None,
     conversation_history: list[dict[str, str]] | None = None,
+    owner_id: str | None = None,
 ) -> WorkflowResult:
     try:
         return run_document_query(
@@ -1205,7 +1278,10 @@ def safe_run_document_query(
             on_answer_delta=on_answer_delta,
             retrieval_query=retrieval_query,
             conversation_history=conversation_history,
+            owner_id=owner_id,
         )
+    except DocumentQueryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1219,6 +1295,7 @@ def safe_run_knowledge_space_query(
     on_answer_delta: Callable[[str], None] | None = None,
     retrieval_query: str | None = None,
     conversation_history: list[dict[str, str]] | None = None,
+    owner_id: str | None = None,
 ) -> WorkflowResult:
     try:
         return run_knowledge_space_query(
@@ -1230,6 +1307,7 @@ def safe_run_knowledge_space_query(
             on_answer_delta,
             retrieval_query,
             conversation_history,
+            owner_id,
         )
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

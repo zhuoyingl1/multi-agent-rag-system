@@ -65,8 +65,9 @@ class DocumentIngestionService:
         file_hash: str,
         metadata: dict[str, Any] | None = None,
         knowledge_space_id: str | None = None,
+        owner_id: str | None = None,
     ) -> RegisteredDocument:
-        duplicate = self.documents.find_duplicate(file_hash, knowledge_space_id)
+        duplicate = self.documents.find_duplicate(file_hash, knowledge_space_id, owner_id)
         if duplicate is not None:
             return RegisteredDocument(document=duplicate, duplicate=True)
         document = self.documents.create(
@@ -77,6 +78,7 @@ class DocumentIngestionService:
             file_hash=file_hash,
             metadata=metadata,
             knowledge_space_id=knowledge_space_id,
+            owner_id=owner_id,
         )
         return RegisteredDocument(document=document, duplicate=False)
 
@@ -111,25 +113,25 @@ class DocumentIngestionService:
             if self.graph_index is not None:
                 self.graph_index.close()
 
-    def get(self, document_id: str) -> DocumentRecord | None:
-        return self.documents.get(document_id)
+    def get(self, document_id: str, owner_id: str | None = None) -> DocumentRecord | None:
+        return self.documents.get(document_id, owner_id)
 
     @property
     def embedding_model(self) -> str:
         embedder = getattr(self.vector_index, "embedder", None)
         return str(getattr(embedder, "model_name", "none"))
 
-    def prepare_reindex(self, document_id: str) -> DocumentRecord:
-        document = self.documents.get(document_id)
+    def prepare_reindex(self, document_id: str, owner_id: str | None = None) -> DocumentRecord:
+        document = self.documents.get(document_id, owner_id)
         if document is None:
             raise KeyError(f"Document not found: {document_id}")
         if document.status is DocumentStatus.PROCESSING:
             raise DocumentBusyError("Document indexing is already in progress.")
         if not Path(document.file_path).is_file():
             raise FileNotFoundError(f"Document file not found: {document.file_path}")
-        if not self.documents.begin_indexing(document_id, "Reindex requested"):
+        if not self.documents.begin_indexing(document_id, "Reindex requested", owner_id):
             raise DocumentBusyError("Document indexing is already in progress.")
-        refreshed = self.documents.get(document_id)
+        refreshed = self.documents.get(document_id, owner_id)
         return refreshed or replace(
             document,
             status=DocumentStatus.PROCESSING,
@@ -138,17 +140,17 @@ class DocumentIngestionService:
             stage_details="Reindex requested",
         )
 
-    def prepare_retry(self, document_id: str) -> DocumentRecord:
-        document = self.documents.get(document_id)
+    def prepare_retry(self, document_id: str, owner_id: str | None = None) -> DocumentRecord:
+        document = self.documents.get(document_id, owner_id)
         if document is None:
             raise KeyError(f"Document not found: {document_id}")
         if document.status is not DocumentStatus.FAILED:
             raise ValueError("Only failed document indexing can be retried.")
         if not Path(document.file_path).is_file():
             raise FileNotFoundError(f"Document file not found: {document.file_path}")
-        if not self.documents.begin_indexing(document_id, "Retry requested"):
+        if not self.documents.begin_indexing(document_id, "Retry requested", owner_id):
             raise DocumentBusyError("Document indexing is already in progress.")
-        refreshed = self.documents.get(document_id)
+        refreshed = self.documents.get(document_id, owner_id)
         return refreshed or replace(
             document,
             status=DocumentStatus.PROCESSING,
@@ -157,8 +159,8 @@ class DocumentIngestionService:
             stage_details="Retry requested",
         )
 
-    def delete(self, document_id: str) -> DocumentRecord:
-        document = self.documents.get(document_id)
+    def delete(self, document_id: str, owner_id: str | None = None) -> DocumentRecord:
+        document = self.documents.get(document_id, owner_id)
         if document is None:
             raise KeyError(f"Document not found: {document_id}")
         if document.status is DocumentStatus.PROCESSING:
@@ -171,9 +173,9 @@ class DocumentIngestionService:
                 self.graph_index.delete_document(document_id)
             self.chunks.delete_for_document(document_id)
             if self.conversations is not None:
-                self.conversations.delete_for_document(document_id)
+                self.conversations.delete_for_document(document_id, owner_id)
             Path(document.file_path).unlink(missing_ok=True)
-            if not self.documents.delete(document_id):
+            if not self.documents.delete(document_id, owner_id):
                 raise RuntimeError("Document record could not be deleted.")
             return document
         except Exception as exc:

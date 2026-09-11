@@ -38,6 +38,7 @@ class KnowledgeSpaceRecord:
     description: str
     created_at: datetime
     updated_at: datetime
+    owner_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,7 @@ class DocumentRecord:
     indexed_at: datetime | None = None
     chunk_count: int = 0
     knowledge_space_id: str | None = None
+    owner_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -101,3 +103,4 @@ class ConversationRecord:
     assistant_id: str | None = None
     document_id: str | None = None
     knowledge_space_id: str | None = None
+    owner_id: str | None = None

@@ -35,6 +35,7 @@ The application now supports persistent, versioned document indexing across Mong
 - Deployment liveness and concurrent dependency readiness probes
 - Configurable local or Redis/Celery document task dispatch with live worker readiness
 - Optional JWT API authentication with scrypt password hashing and MongoDB user accounts
+- Per-user ownership isolation for knowledge spaces, documents, conversations, and registered-document queries
 - Next.js console for query, streaming, metrics, and source inspection
 - SSE workflow events with progressive answer delta rendering
 - Local evaluation runner with JSON cases and JSON report export
@@ -72,7 +73,7 @@ The application now supports persistent, versioned document indexing across Mong
 
 ## Planned Capabilities
 
-- Production deployment hardening, authentication, and larger benchmark coverage
+- Production deployment hardening and larger benchmark coverage
 
 ## Quick Start
 
@@ -119,6 +120,8 @@ python -m uvicorn multi_agent_rag.api.main:app --reload --app-dir src
 ```
 
 Register with `POST /auth/register`, obtain a new token with `POST /auth/token`, and verify it with `GET /auth/me`. In the API documentation, use the `Authorize` control and enter the access token before calling protected endpoints. Set `AUTH_ALLOW_REGISTRATION=false` after provisioning users when public registration is not desired.
+
+When authentication is enabled, knowledge spaces, uploaded documents, and conversations are owned by the authenticated user. Resource lookups are filtered by owner and inaccessible records return `404`. Authenticated queries must use a registered `document_id` or `knowledge_space_id`; arbitrary server-local document paths and local-path evaluation are disabled. Records created before ownership support are unowned and remain available only while `AUTH_REQUIRED=false`; re-upload them under the intended account before enabling authentication.
 
 Enable local LLM answer composition with Ollama for CLI demos:
 

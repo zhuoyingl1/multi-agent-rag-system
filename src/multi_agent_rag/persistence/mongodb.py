@@ -89,7 +89,7 @@ class KnowledgeSpaceRepository:
     def from_store(cls, store: MongoStore) -> "KnowledgeSpaceRepository":
         return cls(store.collection("knowledge_spaces"))
 
-    def create(self, name: str, description: str = "") -> KnowledgeSpaceRecord:
+    def create(self, name: str, description: str = "", owner_id: str | None = None) -> KnowledgeSpaceRecord:
         normalized_name = name.strip()
         if not normalized_name:
             raise ValueError("Knowledge space name must not be empty.")
@@ -97,6 +97,7 @@ class KnowledgeSpaceRepository:
         payload: dict[str, Any] = {
             "name": normalized_name,
             "description": description.strip(),
+            "owner_id": owner_id,
             "created_at": now,
             "updated_at": now,
         }
@@ -104,16 +105,27 @@ class KnowledgeSpaceRepository:
         payload["_id"] = result.inserted_id
         return _knowledge_space_record(payload)
 
-    def get(self, knowledge_space_id: str) -> KnowledgeSpaceRecord | None:
-        space = self.collection.find_one(_object_id_filter(knowledge_space_id, "knowledge space"))
+    def get(self, knowledge_space_id: str, owner_id: str | None = None) -> KnowledgeSpaceRecord | None:
+        space_filter: dict[str, Any] = _object_id_filter(knowledge_space_id, "knowledge space")
+        if owner_id is not None:
+            space_filter["owner_id"] = owner_id
+        space = self.collection.find_one(space_filter)
         return _knowledge_space_record(space) if space else None
 
-    def list(self, *, skip: int = 0, limit: int = 100) -> list[KnowledgeSpaceRecord]:
-        cursor = self.collection.find({}).sort("updated_at", -1).skip(skip).limit(limit)
+    def list(
+        self,
+        *,
+        skip: int = 0,
+        limit: int = 100,
+        owner_id: str | None = None,
+    ) -> list[KnowledgeSpaceRecord]:
+        space_filter = {"owner_id": owner_id} if owner_id is not None else {}
+        cursor = self.collection.find(space_filter).sort("updated_at", -1).skip(skip).limit(limit)
         return [_knowledge_space_record(space) for space in cursor]
 
-    def count(self) -> int:
-        return int(self.collection.count_documents({}))
+    def count(self, owner_id: str | None = None) -> int:
+        space_filter = {"owner_id": owner_id} if owner_id is not None else {}
+        return int(self.collection.count_documents(space_filter))
 
 
 class UserRepository:
@@ -177,6 +189,7 @@ class DocumentRepository:
         file_hash: str,
         metadata: dict[str, Any] | None = None,
         knowledge_space_id: str | None = None,
+        owner_id: str | None = None,
     ) -> DocumentRecord:
         now = utc_now()
         payload: dict[str, Any] = {
@@ -187,6 +200,7 @@ class DocumentRepository:
             "file_hash": file_hash,
             "metadata": metadata or {},
             "knowledge_space_id": knowledge_space_id,
+            "owner_id": owner_id,
             "status": DocumentStatus.PROCESSING.value,
             "progress_percentage": 0,
             "current_stage": "upload",
@@ -203,12 +217,23 @@ class DocumentRepository:
         payload["_id"] = result.inserted_id
         return _document_record(payload)
 
-    def get(self, document_id: str) -> DocumentRecord | None:
-        document = self.collection.find_one(_document_filter(document_id))
+    def get(self, document_id: str, owner_id: str | None = None) -> DocumentRecord | None:
+        document_filter: dict[str, Any] = _document_filter(document_id)
+        if owner_id is not None:
+            document_filter["owner_id"] = owner_id
+        document = self.collection.find_one(document_filter)
         return _document_record(document) if document else None
 
-    def find_duplicate(self, file_hash: str, knowledge_space_id: str | None = None) -> DocumentRecord | None:
-        document = self.collection.find_one({"file_hash": file_hash, "knowledge_space_id": knowledge_space_id})
+    def find_duplicate(
+        self,
+        file_hash: str,
+        knowledge_space_id: str | None = None,
+        owner_id: str | None = None,
+    ) -> DocumentRecord | None:
+        document_filter: dict[str, Any] = {"file_hash": file_hash, "knowledge_space_id": knowledge_space_id}
+        if owner_id is not None:
+            document_filter["owner_id"] = owner_id
+        document = self.collection.find_one(document_filter)
         return _document_record(document) if document else None
 
     def list(
@@ -218,42 +243,66 @@ class DocumentRepository:
         limit: int = 50,
         status: DocumentStatus | None = None,
         knowledge_space_id: str | None = None,
+        owner_id: str | None = None,
     ) -> list[DocumentRecord]:
         document_filter: dict[str, Any] = {}
         if status is not None:
             document_filter["status"] = status.value
         if knowledge_space_id is not None:
             document_filter["knowledge_space_id"] = knowledge_space_id
+        if owner_id is not None:
+            document_filter["owner_id"] = owner_id
         cursor = self.collection.find(document_filter).sort("created_at", -1).skip(skip).limit(limit)
         return [_document_record(document) for document in cursor]
 
-    def count(self, status: DocumentStatus | None = None, knowledge_space_id: str | None = None) -> int:
+    def count(
+        self,
+        status: DocumentStatus | None = None,
+        knowledge_space_id: str | None = None,
+        owner_id: str | None = None,
+    ) -> int:
         document_filter: dict[str, Any] = {}
         if status is not None:
             document_filter["status"] = status.value
         if knowledge_space_id is not None:
             document_filter["knowledge_space_id"] = knowledge_space_id
+        if owner_id is not None:
+            document_filter["owner_id"] = owner_id
         return int(self.collection.count_documents(document_filter))
 
-    def set_knowledge_space(self, document_id: str, knowledge_space_id: str | None) -> bool:
+    def set_knowledge_space(
+        self,
+        document_id: str,
+        knowledge_space_id: str | None,
+        owner_id: str | None = None,
+    ) -> bool:
+        document_filter: dict[str, Any] = _document_filter(document_id)
+        if owner_id is not None:
+            document_filter["owner_id"] = owner_id
         result = self.collection.update_one(
-            _document_filter(document_id),
+            document_filter,
             {"$set": {"knowledge_space_id": knowledge_space_id, "updated_at": utc_now()}},
         )
         return result.matched_count > 0
 
-    def update_title(self, document_id: str, title: str) -> bool:
+    def update_title(self, document_id: str, title: str, owner_id: str | None = None) -> bool:
         normalized_title = title.strip()
         if not normalized_title:
             raise ValueError("Document title must not be empty.")
+        document_filter: dict[str, Any] = _document_filter(document_id)
+        if owner_id is not None:
+            document_filter["owner_id"] = owner_id
         result = self.collection.update_one(
-            _document_filter(document_id),
+            document_filter,
             {"$set": {"title": normalized_title, "updated_at": utc_now()}},
         )
         return result.matched_count > 0
 
-    def delete(self, document_id: str) -> bool:
-        result = self.collection.delete_one(_document_filter(document_id))
+    def delete(self, document_id: str, owner_id: str | None = None) -> bool:
+        document_filter: dict[str, Any] = _document_filter(document_id)
+        if owner_id is not None:
+            document_filter["owner_id"] = owner_id
+        result = self.collection.delete_one(document_filter)
         return result.deleted_count > 0
 
     def update_status(self, document_id: str, status: DocumentStatus, details: str = "") -> bool:
@@ -283,10 +332,12 @@ class DocumentRepository:
         )
         return result.matched_count > 0
 
-    def begin_indexing(self, document_id: str, details: str = "") -> bool:
+    def begin_indexing(self, document_id: str, details: str = "", owner_id: str | None = None) -> bool:
         """Mark a document unavailable while all indexes are being replaced."""
 
         document_filter: dict[str, Any] = _document_filter(document_id)
+        if owner_id is not None:
+            document_filter["owner_id"] = owner_id
         document_filter["status"] = {"$ne": DocumentStatus.PROCESSING.value}
         result = self.collection.update_one(
             document_filter,
@@ -410,6 +461,7 @@ class ConversationRepository:
         assistant_id: str | None = None,
         document_id: str | None = None,
         knowledge_space_id: str | None = None,
+        owner_id: str | None = None,
     ) -> ConversationRecord:
         now = utc_now()
         payload: dict[str, Any] = {
@@ -418,6 +470,7 @@ class ConversationRepository:
             "assistant_id": assistant_id,
             "document_id": document_id,
             "knowledge_space_id": knowledge_space_id,
+            "owner_id": owner_id,
             "messages": [],
             "created_at": now,
             "updated_at": now,
@@ -425,8 +478,11 @@ class ConversationRepository:
         self.collection.insert_one(payload)
         return _conversation_record(payload)
 
-    def get(self, conversation_id: str) -> ConversationRecord | None:
-        conversation = self.collection.find_one({"_id": conversation_id})
+    def get(self, conversation_id: str, owner_id: str | None = None) -> ConversationRecord | None:
+        conversation_filter: dict[str, Any] = {"_id": conversation_id}
+        if owner_id is not None:
+            conversation_filter["owner_id"] = owner_id
+        conversation = self.collection.find_one(conversation_filter)
         return _conversation_record(conversation) if conversation else None
 
     def list(
@@ -436,6 +492,7 @@ class ConversationRepository:
         limit: int = 100,
         document_id: str | None = None,
         knowledge_space_id: str | None = None,
+        owner_id: str | None = None,
     ) -> list[ConversationRecord]:
         if skip < 0 or not 1 <= limit <= 100:
             raise ValueError("Conversation pagination is out of range.")
@@ -444,19 +501,27 @@ class ConversationRepository:
             conversation_filter["document_id"] = document_id
         if knowledge_space_id is not None:
             conversation_filter["knowledge_space_id"] = knowledge_space_id
+        if owner_id is not None:
+            conversation_filter["owner_id"] = owner_id
         cursor = self.collection.find(conversation_filter).sort("updated_at", -1).skip(skip).limit(limit)
         return [_conversation_record(conversation) for conversation in cursor]
 
-    def delete(self, conversation_id: str) -> bool:
-        result = self.collection.delete_one({"_id": conversation_id})
+    def delete(self, conversation_id: str, owner_id: str | None = None) -> bool:
+        conversation_filter: dict[str, Any] = {"_id": conversation_id}
+        if owner_id is not None:
+            conversation_filter["owner_id"] = owner_id
+        result = self.collection.delete_one(conversation_filter)
         return result.deleted_count > 0
 
-    def update_title(self, conversation_id: str, title: str) -> bool:
+    def update_title(self, conversation_id: str, title: str, owner_id: str | None = None) -> bool:
         normalized_title = title.strip()
         if not normalized_title:
             raise ValueError("Conversation title must not be empty.")
+        conversation_filter: dict[str, Any] = {"_id": conversation_id}
+        if owner_id is not None:
+            conversation_filter["owner_id"] = owner_id
         result = self.collection.update_one(
-            {"_id": conversation_id},
+            conversation_filter,
             {"$set": {"title": normalized_title, "updated_at": utc_now()}},
         )
         return result.matched_count > 0
@@ -468,6 +533,7 @@ class ConversationRepository:
         role: str,
         content: str,
         metadata: dict[str, Any] | None = None,
+        owner_id: str | None = None,
     ) -> ConversationMessage:
         if role not in {"user", "assistant"}:
             raise ValueError("Conversation message role must be 'user' or 'assistant'.")
@@ -480,8 +546,11 @@ class ConversationRepository:
             "timestamp": utc_now(),
             "metadata": metadata or {},
         }
+        conversation_filter: dict[str, Any] = {"_id": conversation_id}
+        if owner_id is not None:
+            conversation_filter["owner_id"] = owner_id
         result = self.collection.update_one(
-            {"_id": conversation_id},
+            conversation_filter,
             {"$push": {"messages": message}, "$set": {"updated_at": message["timestamp"]}},
         )
         if result.matched_count == 0:
@@ -495,6 +564,7 @@ class ConversationRepository:
         user_content: str,
         assistant_content: str,
         assistant_metadata: dict[str, Any] | None = None,
+        owner_id: str | None = None,
     ) -> tuple[ConversationMessage, ConversationMessage]:
         if not user_content.strip() or not assistant_content.strip():
             raise ValueError("Conversation turn messages must not be empty.")
@@ -515,16 +585,22 @@ class ConversationRepository:
                 "metadata": assistant_metadata or {},
             },
         ]
+        conversation_filter: dict[str, Any] = {"_id": conversation_id}
+        if owner_id is not None:
+            conversation_filter["owner_id"] = owner_id
         result = self.collection.update_one(
-            {"_id": conversation_id},
+            conversation_filter,
             {"$push": {"messages": {"$each": messages}}, "$set": {"updated_at": now}},
         )
         if result.matched_count == 0:
             raise KeyError(f"Conversation not found: {conversation_id}")
         return _conversation_message(messages[0]), _conversation_message(messages[1])
 
-    def delete_for_document(self, document_id: str) -> int:
-        return int(self.collection.delete_many({"document_id": document_id}).deleted_count)
+    def delete_for_document(self, document_id: str, owner_id: str | None = None) -> int:
+        conversation_filter: dict[str, Any] = {"document_id": document_id}
+        if owner_id is not None:
+            conversation_filter["owner_id"] = owner_id
+        return int(self.collection.delete_many(conversation_filter).deleted_count)
 
 
 def _object_id_filter(value: str, label: str) -> dict[str, ObjectId]:
@@ -545,6 +621,7 @@ def _knowledge_space_record(space: dict[str, Any]) -> KnowledgeSpaceRecord:
         description=str(space.get("description") or ""),
         created_at=space["created_at"],
         updated_at=space["updated_at"],
+        owner_id=space.get("owner_id"),
     )
 
 
@@ -581,6 +658,7 @@ def _document_record(document: dict[str, Any]) -> DocumentRecord:
         indexed_at=document.get("indexed_at"),
         chunk_count=int(document.get("chunk_count", 0)),
         knowledge_space_id=document.get("knowledge_space_id"),
+        owner_id=document.get("owner_id"),
     )
 
 
@@ -613,6 +691,7 @@ def _conversation_record(conversation: dict[str, Any]) -> ConversationRecord:
         assistant_id=conversation.get("assistant_id"),
         document_id=conversation.get("document_id"),
         knowledge_space_id=conversation.get("knowledge_space_id"),
+        owner_id=conversation.get("owner_id"),
         messages=[_conversation_message(message) for message in conversation.get("messages", [])],
         created_at=conversation["created_at"],
         updated_at=conversation["updated_at"],

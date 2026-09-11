@@ -179,7 +179,7 @@ def test_prepare_reindex_marks_existing_document_as_processing(tmp_path) -> None
 
     prepared = DocumentIngestionService(documents, chunks).prepare_reindex("document-id")
 
-    documents.begin_indexing.assert_called_once_with("document-id", "Reindex requested")
+    documents.begin_indexing.assert_called_once_with("document-id", "Reindex requested", None)
     assert prepared.status is DocumentStatus.PROCESSING
     assert prepared.current_stage == "queued"
 
@@ -234,7 +234,7 @@ def test_prepare_retry_requeues_failed_document(tmp_path) -> None:
 
     prepared = DocumentIngestionService(documents, MagicMock()).prepare_retry("document-id")
 
-    documents.begin_indexing.assert_called_once_with("document-id", "Retry requested")
+    documents.begin_indexing.assert_called_once_with("document-id", "Retry requested", None)
     assert prepared.status is DocumentStatus.PROCESSING
     assert prepared.stage_details == "Retry requested"
 
@@ -322,8 +322,8 @@ def test_delete_removes_document_from_every_store(tmp_path) -> None:
     vectors.delete_document.assert_called_once_with("document-id")
     graph.delete_document.assert_called_once_with("document-id")
     chunks.delete_for_document.assert_called_once_with("document-id")
-    conversations.delete_for_document.assert_called_once_with("document-id")
-    documents.delete.assert_called_once_with("document-id")
+    conversations.delete_for_document.assert_called_once_with("document-id", None)
+    documents.delete.assert_called_once_with("document-id", None)
     assert path.exists() is False
     vectors.close.assert_called_once()
     graph.close.assert_called_once()

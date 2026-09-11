@@ -88,6 +88,19 @@ def test_knowledge_space_repository_creates_and_lists_spaces() -> None:
     assert repository.count() == 1
 
 
+def test_knowledge_space_repository_filters_by_owner() -> None:
+    collection = MagicMock()
+    collection.find.return_value = FakeCursor([])
+    collection.count_documents.return_value = 0
+    repository = KnowledgeSpaceRepository(collection)
+
+    repository.list(owner_id="user-a")
+    repository.count("user-a")
+
+    collection.find.assert_called_once_with({"owner_id": "user-a"})
+    collection.count_documents.assert_called_once_with({"owner_id": "user-a"})
+
+
 def test_user_repository_creates_and_reads_normalized_user() -> None:
     collection = MagicMock()
     repository = UserRepository(collection)
@@ -225,6 +238,22 @@ def test_document_repository_filters_and_assigns_knowledge_space() -> None:
     assert collection.update_one.call_args.args[1]["$set"]["knowledge_space_id"] == "space-id"
 
 
+def test_document_repository_filters_reads_and_updates_by_owner() -> None:
+    collection = MagicMock()
+    collection.find_one.return_value = None
+    collection.update_one.return_value = SimpleNamespace(matched_count=1)
+    repository = DocumentRepository(collection)
+    document_id = str(ObjectId())
+
+    assert repository.get(document_id, "user-a") is None
+    assert repository.update_title(document_id, "Private notes", "user-a") is True
+
+    expected_filter = {"_id": ObjectId(document_id), "owner_id": "user-a"}
+    collection.find_one.assert_called_once_with(expected_filter)
+    collection.update_one.assert_called_once()
+    assert collection.update_one.call_args.args[0] == expected_filter
+
+
 def test_document_repository_updates_normalized_title() -> None:
     collection = MagicMock()
     collection.update_one.return_value = SimpleNamespace(matched_count=1)
@@ -287,6 +316,27 @@ def test_conversation_repository_lists_scope_and_deletes() -> None:
     assert deleted is True
     collection.find.assert_called_once_with({"document_id": "document-id"})
     collection.delete_one.assert_called_once_with({"_id": "conversation-id"})
+
+
+def test_conversation_repository_filters_mutations_by_owner() -> None:
+    collection = MagicMock()
+    collection.find.return_value = FakeCursor([])
+    collection.update_one.return_value = SimpleNamespace(matched_count=1)
+    collection.delete_one.return_value = SimpleNamespace(deleted_count=1)
+    repository = ConversationRepository(collection)
+
+    repository.list(document_id="document-id", owner_id="user-a")
+    repository.add_turn(
+        "conversation-id",
+        user_content="Summarize this.",
+        assistant_content="Summary.",
+        owner_id="user-a",
+    )
+    repository.delete("conversation-id", "user-a")
+
+    collection.find.assert_called_once_with({"document_id": "document-id", "owner_id": "user-a"})
+    assert collection.update_one.call_args.args[0] == {"_id": "conversation-id", "owner_id": "user-a"}
+    collection.delete_one.assert_called_once_with({"_id": "conversation-id", "owner_id": "user-a"})
 
 
 def test_conversation_repository_updates_normalized_title() -> None:

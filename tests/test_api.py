@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from docx import Document as WordDocument
 
 from multi_agent_rag.api.main import build_app, run_query
-from multi_agent_rag.auth import hash_password
+from multi_agent_rag.auth import hash_password, issue_access_token
 from multi_agent_rag.health import DependencyStatus, ReadinessReport
 from multi_agent_rag.ingestion import (
     CHUNKING_VERSION,
@@ -79,6 +79,17 @@ def fake_user(password: str = "secure-password") -> UserRecord:
     )
 
 
+def authenticated_headers(monkeypatch, user: UserRecord | None = None) -> tuple[dict[str, str], UserRecord]:
+    monkeypatch.setenv("AUTH_REQUIRED", "true")
+    monkeypatch.setenv("JWT_SECRET", "test-secret-that-is-at-least-32-characters")
+    authenticated_user = user or fake_user()
+    repository = MagicMock()
+    repository.get.return_value = authenticated_user
+    monkeypatch.setattr("multi_agent_rag.api.main.UserRepository.from_store", lambda _store: repository)
+    token, _ = issue_access_token(authenticated_user)
+    return {"Authorization": f"Bearer {token}"}, authenticated_user
+
+
 def test_health_endpoint() -> None:
     client = TestClient(build_app())
 
@@ -138,6 +149,71 @@ def test_required_authentication_rejects_missing_and_invalid_tokens(monkeypatch)
     assert missing.headers["www-authenticate"] == "Bearer"
     assert invalid.status_code == 401
     assert public.status_code == 200
+
+
+def test_authenticated_catalog_requests_use_current_user_ownership(monkeypatch) -> None:
+    headers, user = authenticated_headers(monkeypatch)
+    spaces = MagicMock()
+    spaces.create.return_value = replace(fake_knowledge_space(), owner_id=user.user_id)
+    spaces.list.return_value = [replace(fake_knowledge_space(), owner_id=user.user_id)]
+    spaces.count.return_value = 1
+    documents = MagicMock()
+    documents.count.return_value = 0
+    conversations = MagicMock()
+    conversations.list.return_value = []
+    monkeypatch.setattr("multi_agent_rag.api.main.KnowledgeSpaceRepository.from_store", lambda _store: spaces)
+    monkeypatch.setattr("multi_agent_rag.api.main.DocumentRepository.from_store", lambda _store: documents)
+    monkeypatch.setattr("multi_agent_rag.api.main.ConversationRepository.from_store", lambda _store: conversations)
+    client = TestClient(build_app())
+
+    created = client.post("/knowledge-spaces", json={"name": "Private research"}, headers=headers)
+    listed = client.get("/knowledge-spaces", headers=headers)
+    conversation_list = client.get("/conversations", headers=headers)
+
+    assert created.status_code == 200
+    assert listed.status_code == 200
+    assert conversation_list.status_code == 200
+    spaces.create.assert_called_once_with("Private research", "", user.user_id)
+    spaces.list.assert_called_once_with(skip=0, limit=50, owner_id=user.user_id)
+    conversations.list.assert_called_once_with(
+        skip=0,
+        limit=50,
+        document_id=None,
+        knowledge_space_id=None,
+        owner_id=user.user_id,
+    )
+
+
+def test_authenticated_user_cannot_access_unowned_resources_or_local_paths(monkeypatch) -> None:
+    headers, user = authenticated_headers(monkeypatch)
+    documents = MagicMock()
+    documents.get.return_value = None
+    monkeypatch.setattr("multi_agent_rag.api.main.DocumentRepository.from_store", lambda _store: documents)
+    client = TestClient(build_app())
+
+    missing = client.get("/documents/507f1f77bcf86cd799439011", headers=headers)
+    unowned_query = client.post(
+        "/query",
+        json={"query": "Read this document.", "document_id": "507f1f77bcf86cd799439011"},
+        headers=headers,
+    )
+    local_query = client.post(
+        "/query",
+        json={"query": "Read this file.", "document_path": "examples/sample_docs.md"},
+        headers=headers,
+    )
+    local_evaluation = client.post(
+        "/evaluate",
+        json={"document_path": "examples/sample_docs.md", "cases_path": "examples/eval_cases.json"},
+        headers=headers,
+    )
+
+    assert missing.status_code == 404
+    assert unowned_query.status_code == 404
+    assert local_query.status_code == 403
+    assert local_evaluation.status_code == 403
+    assert documents.get.call_count == 2
+    documents.get.assert_called_with("507f1f77bcf86cd799439011", user.user_id)
 
 
 def test_authentication_hides_storage_failures(monkeypatch) -> None:
@@ -229,7 +305,13 @@ def test_knowledge_space_endpoints_create_and_list(monkeypatch) -> None:
     assert created.json()["name"] == "Research"
     assert listed.status_code == 200
     assert listed.json()["knowledge_spaces"][0]["document_count"] == 2
-    documents.count.assert_called_once_with(knowledge_space_id="507f1f77bcf86cd799439012")
+    spaces.create.assert_called_once_with("Research", "Related research documents", None)
+    spaces.list.assert_called_once_with(skip=0, limit=10, owner_id=None)
+    spaces.count.assert_called_once_with(None)
+    documents.count.assert_called_once_with(
+        knowledge_space_id="507f1f77bcf86cd799439012",
+        owner_id=None,
+    )
 
 
 def test_query_endpoint_returns_grounded_answer() -> None:
@@ -305,6 +387,7 @@ def test_query_endpoint_uses_persistent_document_id(monkeypatch) -> None:
         _on_answer_delta,
         _retrieval_query,
         _conversation_history,
+        _owner_id,
     ):
         captured["query"] = query
         captured["document_id"] = document_id
@@ -427,6 +510,7 @@ def test_create_conversation_scopes_it_to_document(monkeypatch) -> None:
     conversations.create.assert_called_once_with(
         title="Document review",
         document_id="507f1f77bcf86cd799439011",
+        owner_id=None,
     )
 
 
@@ -441,7 +525,10 @@ def test_create_conversation_scopes_it_to_knowledge_space(monkeypatch) -> None:
         created_at=now,
         updated_at=now,
     )
-    monkeypatch.setattr("multi_agent_rag.api.main.get_ready_knowledge_space", lambda _space_id: fake_knowledge_space())
+    monkeypatch.setattr(
+        "multi_agent_rag.api.main.get_ready_knowledge_space",
+        lambda _space_id, _owner_id=None: fake_knowledge_space(),
+    )
     monkeypatch.setattr("multi_agent_rag.api.main.ConversationRepository.from_store", lambda _store: conversations)
     client = TestClient(build_app())
 
@@ -455,6 +542,7 @@ def test_create_conversation_scopes_it_to_knowledge_space(monkeypatch) -> None:
     conversations.create.assert_called_once_with(
         title="Research",
         knowledge_space_id="507f1f77bcf86cd799439012",
+        owner_id=None,
     )
 
 
@@ -471,6 +559,10 @@ def test_list_conversations_returns_scoped_summaries(monkeypatch) -> None:
             updated_at=now,
         )
     ]
+    monkeypatch.setattr(
+        "multi_agent_rag.api.main.get_document_record",
+        lambda _document_id, _owner_id=None: fake_document(DocumentStatus.COMPLETED),
+    )
     monkeypatch.setattr("multi_agent_rag.api.main.ConversationRepository.from_store", lambda _store: conversations)
     client = TestClient(build_app())
 
@@ -487,6 +579,7 @@ def test_list_conversations_returns_scoped_summaries(monkeypatch) -> None:
         limit=20,
         document_id="507f1f77bcf86cd799439011",
         knowledge_space_id=None,
+        owner_id=None,
     )
 
 
@@ -521,7 +614,7 @@ def test_update_conversation_renames_existing_record(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["title"] == "Payment terms"
-    conversations.update_title.assert_called_once_with("conversation-id", "Payment terms")
+    conversations.update_title.assert_called_once_with("conversation-id", "Payment terms", None)
 
 
 def test_update_conversation_rejects_blank_title(monkeypatch) -> None:
@@ -826,8 +919,13 @@ def test_document_list_endpoint_returns_paginated_catalog(monkeypatch) -> None:
     assert data["total"] == 1
     assert data["documents"][0]["filename"] == "uploaded.md"
     assert data["documents"][0]["chunk_count"] == 2
-    repository.list.assert_called_once_with(skip=0, limit=10, status=DocumentStatus.COMPLETED)
-    repository.count.assert_called_once_with(DocumentStatus.COMPLETED)
+    repository.list.assert_called_once_with(
+        skip=0,
+        limit=10,
+        status=DocumentStatus.COMPLETED,
+        owner_id=None,
+    )
+    repository.count.assert_called_once_with(DocumentStatus.COMPLETED, owner_id=None)
 
 
 def test_document_can_be_assigned_to_knowledge_space(monkeypatch) -> None:
@@ -840,7 +938,10 @@ def test_document_can_be_assigned_to_knowledge_space(monkeypatch) -> None:
         ),
     ]
     repository.set_knowledge_space.return_value = True
-    monkeypatch.setattr("multi_agent_rag.api.main.get_knowledge_space", lambda _space_id: fake_knowledge_space())
+    monkeypatch.setattr(
+        "multi_agent_rag.api.main.get_knowledge_space",
+        lambda _space_id, _owner_id=None: fake_knowledge_space(),
+    )
     monkeypatch.setattr("multi_agent_rag.api.main.DocumentRepository.from_store", lambda _store: repository)
     client = TestClient(build_app())
 
@@ -854,6 +955,7 @@ def test_document_can_be_assigned_to_knowledge_space(monkeypatch) -> None:
     repository.set_knowledge_space.assert_called_once_with(
         "507f1f77bcf86cd799439011",
         "507f1f77bcf86cd799439012",
+        None,
     )
 
 
@@ -874,7 +976,7 @@ def test_update_document_renames_catalog_record(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["filename"] == "Research notes"
-    repository.update_title.assert_called_once_with("507f1f77bcf86cd799439011", "Research notes")
+    repository.update_title.assert_called_once_with("507f1f77bcf86cd799439011", "Research notes", None)
 
 
 def test_document_chunks_endpoint_returns_filtered_locations(monkeypatch) -> None:
@@ -930,7 +1032,7 @@ def test_delete_document_endpoint_cleans_registered_document(monkeypatch) -> Non
         "filename": "uploaded.md",
         "deleted": True,
     }
-    service.delete.assert_called_once_with("507f1f77bcf86cd799439011")
+    service.delete.assert_called_once_with("507f1f77bcf86cd799439011", None)
 
 
 def test_delete_document_endpoint_reports_store_failure(monkeypatch) -> None:
@@ -955,7 +1057,7 @@ def test_reindex_endpoint_queues_existing_document(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["current_stage"] == "processing"
-    service.prepare_reindex.assert_called_once_with("507f1f77bcf86cd799439011")
+    service.prepare_reindex.assert_called_once_with("507f1f77bcf86cd799439011", None)
     service.process.assert_called_once()
 
 
@@ -981,7 +1083,7 @@ def test_retry_endpoint_queues_failed_document(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "processing"
-    service.prepare_retry.assert_called_once_with("507f1f77bcf86cd799439011")
+    service.prepare_retry.assert_called_once_with("507f1f77bcf86cd799439011", None)
     service.process.assert_called_once()
 
 
