@@ -1,4 +1,4 @@
-"""Deterministic evaluation runner for local RAG workflows."""
+"""Evaluation runner for local RAG workflows."""
 
 from __future__ import annotations
 
@@ -6,8 +6,10 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from statistics import mean
+from time import perf_counter
 
 from multi_agent_rag.documents import load_document
+from multi_agent_rag.evaluation_judge import EvaluationJudge, create_evaluation_judge
 from multi_agent_rag.orchestration import create_workflow
 from multi_agent_rag.retrieval.chunking import chunk_document
 from multi_agent_rag.retrieval.factory import create_retriever
@@ -32,9 +34,17 @@ class EvalCaseResult:
     query: str
     passed: bool
     grounding_score: float
+    relevance_score: float
+    completeness_score: float
     retrieved_sources: int
     latency_ms: float
+    judge_latency_ms: float
     failed_agents: int
+    judge_provider: str
+    judge_model: str
+    judge_reason: str
+    judge_fallback_reason: str
+    unsupported_claims: list[str]
     expected_terms_found: list[str]
     missing_expected_terms: list[str]
     source_terms_found: list[str]
@@ -52,9 +62,13 @@ class EvalReport:
     failed_count: int
     pass_rate: float
     average_grounding_score: float
+    average_relevance_score: float
+    average_completeness_score: float
     average_latency_ms: float
     average_retrieved_sources: float
     total_failed_agents: int
+    llm_judged_count: int
+    fallback_judged_count: int
     cases: list[EvalCaseResult]
 
     def to_dict(self) -> dict[str, object]:
@@ -85,13 +99,15 @@ def run_evaluation(
     cases_path: str | Path,
     orchestrator: str | None = None,
     retrieval_backend: str | None = None,
+    evaluation_judge: EvaluationJudge | None = None,
 ) -> EvalReport:
     document = load_document(document_path)
     retriever = create_retriever(retrieval_backend)
     retriever.index(chunk_document(document))
     try:
         workflow = create_workflow(retriever, orchestrator=orchestrator)
-        case_results = [_run_case(workflow, case) for case in load_eval_cases(cases_path)]
+        judge = evaluation_judge or create_evaluation_judge()
+        case_results = [_run_case(workflow, case, judge) for case in load_eval_cases(cases_path)]
     finally:
         close = getattr(retriever, "close", None)
         if callable(close):
@@ -105,27 +121,42 @@ def run_evaluation(
         failed_count=case_count - passed_count,
         pass_rate=round(passed_count / case_count, 4) if case_count else 0.0,
         average_grounding_score=_average([result.grounding_score for result in case_results]),
+        average_relevance_score=_average([result.relevance_score for result in case_results]),
+        average_completeness_score=_average([result.completeness_score for result in case_results]),
         average_latency_ms=_average([result.latency_ms for result in case_results]),
         average_retrieved_sources=_average([result.retrieved_sources for result in case_results]),
         total_failed_agents=sum(result.failed_agents for result in case_results),
+        llm_judged_count=sum(result.judge_provider == "llm" for result in case_results),
+        fallback_judged_count=sum(result.judge_provider == "deterministic_fallback" for result in case_results),
         cases=case_results,
     )
 
 
-def _run_case(workflow: MultiAgentRAGWorkflow, case: EvalCase) -> EvalCaseResult:
+def _run_case(workflow: MultiAgentRAGWorkflow, case: EvalCase, judge: EvaluationJudge) -> EvalCaseResult:
     result = workflow.run(case.query)
     answer_text = result.answer.lower()
     source_text = " ".join(source.chunk.text for source in result.sources).lower()
     expected_found, expected_missing = _term_matches(answer_text, case.expected_terms)
     source_found, source_missing = _term_matches(source_text, case.required_source_terms)
-    grounding_score = float(result.grounding.score)
+    judge_started = perf_counter()
+    judgment = judge.judge(
+        case.query,
+        result.answer,
+        result.sources,
+        float(result.grounding.score),
+        case.expected_terms,
+    )
+    judge_latency_ms = round((perf_counter() - judge_started) * 1000, 4)
+    grounding_score = judgment.grounding_score
     retrieved_sources = int(result.metrics.get("retrieved_sources", len(result.sources)))
     failed_agents = int(result.metrics.get("failed_agents", 0))
-    latency_ms = float(result.metrics.get("latency_ms", 0.0))
+    latency_ms = round(float(result.metrics.get("latency_ms", 0.0)) + judge_latency_ms, 4)
     passed = (
         not expected_missing
         and not source_missing
         and grounding_score >= case.min_grounding_score
+        and judgment.relevance_score >= 0.5
+        and judgment.completeness_score >= 0.5
         and retrieved_sources > 0
         and failed_agents == 0
     )
@@ -134,9 +165,17 @@ def _run_case(workflow: MultiAgentRAGWorkflow, case: EvalCase) -> EvalCaseResult
         query=case.query,
         passed=passed,
         grounding_score=grounding_score,
+        relevance_score=judgment.relevance_score,
+        completeness_score=judgment.completeness_score,
         retrieved_sources=retrieved_sources,
         latency_ms=latency_ms,
+        judge_latency_ms=judge_latency_ms,
         failed_agents=failed_agents,
+        judge_provider=judgment.provider,
+        judge_model=judgment.model,
+        judge_reason=judgment.reason,
+        judge_fallback_reason=judgment.fallback_reason,
+        unsupported_claims=judgment.unsupported_claims,
         expected_terms_found=expected_found,
         missing_expected_terms=expected_missing,
         source_terms_found=source_found,

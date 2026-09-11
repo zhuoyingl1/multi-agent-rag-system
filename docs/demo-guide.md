@@ -315,6 +315,16 @@ Sample `/evaluate` request:
 {}
 ```
 
+The default local evaluator is deterministic. To exercise LLM-as-a-Judge with Ollama before starting the API or CLI, set:
+
+```powershell
+$env:EVALUATION_JUDGE_PROVIDER = "ollama"
+$env:EVALUATION_JUDGE_MODEL = "qwen2.5:3b"
+$env:EVALUATION_JUDGE_REQUIRED = "false"
+```
+
+Each case reports judge provenance, grounding, relevance, completeness, unsupported claims, and judge latency. When Ollama is unavailable and the judge is optional, `judge_provider` becomes `deterministic_fallback` and `judge_fallback_reason` records the cause. Set `EVALUATION_JUDGE_REQUIRED=true` to treat provider failure as an evaluation error.
+
 Expected `/evaluate` result:
 
 ```json

@@ -41,7 +41,7 @@ The application now supports persistent, versioned document indexing across Mong
 - Frontend registration, login, tab-scoped token persistence, automatic Bearer requests, and sign-out
 - Next.js console for query, streaming, metrics, and source inspection
 - SSE workflow events with progressive answer delta rendering
-- Local evaluation runner with JSON cases and JSON report export
+- LLM-as-a-Judge evaluation with grounding, relevance, completeness, and deterministic fallback reporting
 - Rank-based retrieval evaluation with Recall@K, Precision@K, MRR, nDCG@K, and latency metrics
 - Evidence sufficiency gate with grounded fallback responses
 - Production integration readiness checks for LangGraph, Qdrant, Neo4j, and reranking
@@ -106,6 +106,8 @@ python -m multi_agent_rag retrieval-eval --retrieval-backend local --top-k 5 --m
 ```
 
 Both commands accept `--max-average-latency-ms` for controlled performance environments. Latency is reported but not enforced in shared CI because runner performance is variable. JSON reports include every configured quality-gate check, its threshold, actual value, and pass status.
+
+Evaluation defaults to the deterministic judge for reproducible local and CI runs. Set `EVALUATION_JUDGE_PROVIDER=ollama` to grade each answer against its retrieved evidence with a local LLM. Reports identify the judge provider and model, record grounding, relevance, completeness, unsupported claims, and judge latency, and expose any deterministic fallback reason. Set `EVALUATION_JUDGE_REQUIRED=true` when a missing LLM judge should fail the evaluation instead of using the fallback.
 
 Runtime retrieval settings can be inspected with `GET /settings/runtime` and partially updated with `PUT /settings/runtime`. The API accepts only documented non-sensitive settings such as `top_k`, query rewriting, adaptive result selection, context budget, reranker candidate count, and RRF strength. Updates are atomic and affect new requests only. Secrets, service URLs, model names, and credentials remain environment-only configuration. Local runs default to the in-memory backend. Docker Compose enables the MongoDB backend, which persists settings across restarts, checks revisions to prevent stale writes, and refreshes each API process through a configurable TTL cache.
 

@@ -208,16 +208,26 @@ def run_eval(args: argparse.Namespace) -> int:
     print(f"- failed: {report.failed_count}")
     print(f"- pass_rate: {report.pass_rate}")
     print(f"- average_grounding_score: {report.average_grounding_score}")
+    print(f"- average_relevance_score: {report.average_relevance_score}")
+    print(f"- average_completeness_score: {report.average_completeness_score}")
     print(f"- average_latency_ms: {report.average_latency_ms}")
     print(f"- average_retrieved_sources: {report.average_retrieved_sources}")
     print(f"- total_failed_agents: {report.total_failed_agents}")
+    print(f"- llm_judged_count: {report.llm_judged_count}")
+    print(f"- fallback_judged_count: {report.fallback_judged_count}")
     print("Cases:")
     for case in report.cases:
         status = "PASS" if case.passed else "FAIL"
         print(
             f"- {case.case_id}: {status} "
-            f"grounding={case.grounding_score} sources={case.retrieved_sources} latency_ms={case.latency_ms}"
+            f"grounding={case.grounding_score} relevance={case.relevance_score} "
+            f"completeness={case.completeness_score} sources={case.retrieved_sources} "
+            f"judge={case.judge_provider}/{case.judge_model} latency_ms={case.latency_ms}"
         )
+        if case.judge_fallback_reason:
+            print(f"  judge_fallback_reason: {case.judge_fallback_reason}")
+        if case.unsupported_claims:
+            print(f"  unsupported_claims: {'; '.join(case.unsupported_claims)}")
         if case.missing_expected_terms:
             print(f"  missing_expected_terms: {', '.join(case.missing_expected_terms)}")
         if case.missing_source_terms:

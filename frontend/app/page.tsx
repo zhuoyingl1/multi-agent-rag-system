@@ -199,9 +199,16 @@ type EvalCaseResult = {
   query: string;
   passed: boolean;
   grounding_score: number;
+  relevance_score: number;
+  completeness_score: number;
   retrieved_sources: number;
   latency_ms: number;
   failed_agents: number;
+  judge_provider: string;
+  judge_model: string;
+  judge_reason: string;
+  judge_fallback_reason: string;
+  unsupported_claims: string[];
   missing_expected_terms: string[];
   missing_source_terms: string[];
 };
@@ -212,9 +219,13 @@ type EvalReport = {
   failed_count: number;
   pass_rate: number;
   average_grounding_score: number;
+  average_relevance_score: number;
+  average_completeness_score: number;
   average_latency_ms: number;
   average_retrieved_sources: number;
   total_failed_agents: number;
+  llm_judged_count: number;
+  fallback_judged_count: number;
   cases: EvalCaseResult[];
 };
 
@@ -1718,8 +1729,11 @@ export default function Home() {
               <div className="evalMetrics">
                 <Metric label="Pass rate" value={`${Math.round(evaluation.pass_rate * 100)}%`} />
                 <Metric label="Avg grounding" value={evaluation.average_grounding_score.toFixed(2)} />
-                <Metric label="Avg latency" value={`${evaluation.average_latency_ms.toFixed(2)} ms`} />
-                <Metric label="Failed agents" value={evaluation.total_failed_agents.toString()} />
+                <Metric label="Avg relevance" value={evaluation.average_relevance_score.toFixed(2)} />
+                <Metric
+                  label="Judge runs"
+                  value={`${evaluation.llm_judged_count} LLM / ${evaluation.fallback_judged_count} fallback`}
+                />
               </div>
               <div className="caseList">
                 {evaluation.cases.map((item) => (
@@ -1727,6 +1741,7 @@ export default function Home() {
                     <div>
                       <strong>{item.case_id}</strong>
                       <span>{item.query}</span>
+                      <span>{`${item.judge_provider} / ${item.judge_model}`}</span>
                     </div>
                     <span className={`statusPill ${item.passed ? "ready" : "missing_config"}`}>
                       {item.passed ? "PASS" : "FAIL"}
