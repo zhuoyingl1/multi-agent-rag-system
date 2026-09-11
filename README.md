@@ -74,7 +74,7 @@ The application now supports persistent, versioned document indexing across Mong
 
 ## Planned Capabilities
 
-- Production deployment hardening and larger benchmark coverage
+- Larger benchmark coverage and deployment automation
 
 ## Quick Start
 
@@ -150,6 +150,43 @@ npm run dev
 ```
 
 The frontend stores the access token in `sessionStorage`, restores valid sessions after a page refresh, and clears invalid tokens after a `401` response. Set `NEXT_PUBLIC_AUTH_REQUIRED=false` to keep the unauthenticated local-development workflow available.
+
+## Full Stack Containers
+
+The Compose stack runs the API, Celery worker, frontend, MongoDB, Qdrant, Neo4j, and Redis. It keeps uploaded documents and Hugging Face model files in shared named volumes so the API and worker see the same files and model downloads survive container restarts.
+
+Ollama remains on the host to avoid duplicating local model storage. Pull the answer and embedding models before starting the stack:
+
+```powershell
+ollama pull qwen2.5:3b
+ollama pull nomic-embed-text
+```
+
+If Ollama is not reachable from Docker Desktop, allow it to listen beyond host loopback and restart Ollama:
+
+```powershell
+$env:OLLAMA_HOST = "0.0.0.0:11434"
+ollama serve
+```
+
+Create the local environment file, review its secrets, and start the stack:
+
+```powershell
+Copy-Item .env.example .env
+docker compose up --build -d
+docker compose ps
+Invoke-RestMethod http://127.0.0.1:8000/health/liveness
+Invoke-RestMethod http://127.0.0.1:8000/health/readiness
+```
+
+Open the web console at `http://127.0.0.1:3000` and the API documentation at `http://127.0.0.1:8000/docs`. Follow service output or stop the stack with:
+
+```powershell
+docker compose logs -f api worker
+docker compose down
+```
+
+Set `INSTALL_PRODUCTION_EXTRAS=false` and `RERANKER_MODEL=lexical` for a smaller development image without the BGE reranker. Keep `INSTALL_PRODUCTION_EXTRAS=true` for the production-like BGE configuration. If authentication is enabled, set `AUTH_REQUIRED=true`, set a strong `JWT_SECRET`, and keep the frontend build setting aligned by rebuilding the frontend service.
 
 ## Demo Guide
 

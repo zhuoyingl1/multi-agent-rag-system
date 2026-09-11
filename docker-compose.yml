@@ -1,3 +1,50 @@
+x-backend-environment: &backend-environment
+  MONGODB_URI: mongodb://mongodb:27017
+  MONGODB_DATABASE: ${MONGODB_DATABASE:-multi_agent_rag}
+  QDRANT_URL: http://qdrant:6333
+  QDRANT_COLLECTION: ${QDRANT_COLLECTION:-documents}
+  QDRANT_DOCUMENT_COLLECTION: ${QDRANT_DOCUMENT_COLLECTION:-document_chunks}
+  QDRANT_SCORE_THRESHOLD: ${QDRANT_SCORE_THRESHOLD:-0.5}
+  RETRIEVAL_BACKEND: ${RETRIEVAL_BACKEND:-qdrant}
+  NEO4J_URI: bolt://neo4j:7687
+  NEO4J_USER: ${NEO4J_USER:-neo4j}
+  NEO4J_PASSWORD: ${NEO4J_PASSWORD:-password123}
+  NEO4J_DATABASE: ${NEO4J_DATABASE:-neo4j}
+  RERANKER_MODEL: ${RERANKER_MODEL:-BAAI/bge-reranker-base}
+  RERANKER_CANDIDATE_MULTIPLIER: ${RERANKER_CANDIDATE_MULTIPLIER:-3}
+  DOCUMENT_TASK_BACKEND: ${CONTAINER_DOCUMENT_TASK_BACKEND:-celery}
+  DOCUMENT_TASK_FALLBACK_LOCAL: ${DOCUMENT_TASK_FALLBACK_LOCAL:-false}
+  CELERY_BROKER_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/1
+  LLM_ANSWER_PROVIDER: ${LLM_ANSWER_PROVIDER:-ollama}
+  LLM_ANSWER_MODEL: ${LLM_ANSWER_MODEL:-qwen2.5:3b}
+  LLM_ANSWER_REQUIRED: ${CONTAINER_LLM_ANSWER_REQUIRED:-true}
+  LLM_ANSWER_TIMEOUT_SECONDS: ${LLM_ANSWER_TIMEOUT_SECONDS:-60}
+  LLM_ANSWER_MAX_TOKENS: ${LLM_ANSWER_MAX_TOKENS:-220}
+  OLLAMA_BASE_URL: ${OLLAMA_CONTAINER_BASE_URL:-http://host.docker.internal:11434}
+  OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+  AUTH_REQUIRED: ${AUTH_REQUIRED:-false}
+  AUTH_ALLOW_REGISTRATION: ${AUTH_ALLOW_REGISTRATION:-true}
+  JWT_SECRET: ${JWT_SECRET:-}
+  JWT_ACCESS_TOKEN_MINUTES: ${JWT_ACCESS_TOKEN_MINUTES:-60}
+  JWT_ISSUER: ${JWT_ISSUER:-multi-agent-rag}
+  JWT_AUDIENCE: ${JWT_AUDIENCE:-multi-agent-rag-api}
+  HEALTH_REQUIRED_SERVICES: ${HEALTH_REQUIRED_SERVICES:-mongodb,qdrant,neo4j,ollama,task_queue}
+  HEALTH_PROBE_TIMEOUT_SECONDS: ${HEALTH_PROBE_TIMEOUT_SECONDS:-2}
+
+x-backend-service: &backend-service
+  build:
+    context: .
+    args:
+      INSTALL_PRODUCTION_EXTRAS: ${INSTALL_PRODUCTION_EXTRAS:-true}
+  environment: *backend-environment
+  extra_hosts:
+    - host.docker.internal:host-gateway
+  volumes:
+    - uploaded_documents:/app/output/uploads
+    - huggingface_cache:/home/app/.cache/huggingface
+  restart: unless-stopped
+
 services:
   mongodb:
     image: mongo:8.0
@@ -5,6 +52,13 @@ services:
       - "27017:27017"
     volumes:
       - mongodb_data_v8:/data/db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   qdrant:
     image: qdrant/qdrant:v1.19.0
@@ -13,6 +67,13 @@ services:
       - "6334:6334"
     volumes:
       - qdrant_storage_v119:/qdrant/storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   neo4j:
     image: neo4j:5.26-community
@@ -20,9 +81,16 @@ services:
       - "7474:7474"
       - "7687:7687"
     environment:
-      NEO4J_AUTH: neo4j/password123
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-password123}
     volumes:
       - neo4j_data_v526:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${NEO4J_AUTH#*/}\" 'RETURN 1' >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   redis:
     image: redis:7.4-alpine
@@ -30,9 +98,60 @@ services:
       - "6379:6379"
     volumes:
       - redis_data_v74:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    <<: *backend-service
+    command: uvicorn multi_agent_rag.api.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    <<: *backend-service
+    command: celery -A multi_agent_rag.celery_app:celery_app worker --loglevel=info --concurrency=1
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://127.0.0.1:8000}
+        NEXT_PUBLIC_AUTH_REQUIRED: ${AUTH_REQUIRED:-false}
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   mongodb_data_v8:
   qdrant_storage_v119:
   neo4j_data_v526:
   redis_data_v74:
+  uploaded_documents:
+  huggingface_cache:
