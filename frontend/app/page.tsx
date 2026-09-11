@@ -13,6 +13,8 @@ import {
   FolderTree,
   History,
   Loader2,
+  LogIn,
+  LogOut,
   MessageSquarePlus,
   Network,
   Pencil,
@@ -24,11 +26,21 @@ import {
   Send,
   Trash2,
   Upload,
+  UserRound,
   X,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import AnswerMarkdown from "./answer-markdown";
+import AuthPanel from "./auth-panel";
+import {
+  AuthSession,
+  authorizedFetch,
+  clearStoredSession,
+  loadStoredSession,
+  storeSession,
+  validateSession,
+} from "./auth-client";
 
 type Source = {
   citation_id: string;
@@ -207,6 +219,7 @@ type EvalReport = {
 };
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
+const authRequiredByConfiguration = process.env.NEXT_PUBLIC_AUTH_REQUIRED === "true";
 const defaultQuery = "";
 
 export default function Home() {
@@ -253,6 +266,10 @@ export default function Home() {
   const [previewQuery, setPreviewQuery] = useState("");
   const [previewType, setPreviewType] = useState("");
   const [hydrated, setHydrated] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
+  const [authRequired, setAuthRequired] = useState(authRequiredByConfiguration);
+  const [authSession, setAuthSession] = useState<AuthSession | null>(null);
+  const [showAuth, setShowAuth] = useState(false);
   const previewLimit = 5;
 
   const sourceCount = result?.sources.length ?? 0;
@@ -278,7 +295,7 @@ export default function Home() {
     deleting ||
     !query.trim() ||
     !scopeReady;
-  const evaluationDisabled = !hydrated || evaluating;
+  const evaluationDisabled = !hydrated || evaluating || Boolean(authSession);
   const groundingScore = useMemo(() => {
     const value = result?.metrics.grounding_score;
     return typeof value === "number" ? value.toFixed(2) : "0.00";
@@ -286,8 +303,44 @@ export default function Home() {
 
   useEffect(() => {
     setHydrated(true);
-    void refreshDashboard();
+    const storedSession = loadStoredSession();
+    if (!storedSession) {
+      setAuthReady(true);
+      return;
+    }
+    void validateSession(apiBaseUrl, storedSession)
+      .then(setAuthSession)
+      .catch(clearStoredSession)
+      .finally(() => setAuthReady(true));
   }, []);
+
+  useEffect(() => {
+    if (authReady && (!authRequired || authSession)) {
+      void refreshDashboard();
+    }
+  }, [authReady, authRequired, authSession]);
+
+  async function apiRequest(input: RequestInfo | URL, init: RequestInit = {}) {
+    const response = await authorizedFetch(input, authSession?.access_token ?? "", init);
+    if (response.status === 401) {
+      clearStoredSession();
+      setAuthSession(null);
+      setAuthRequired(true);
+      setShowAuth(true);
+      throw new Error("Your session expired. Sign in again.");
+    }
+    return response;
+  }
+
+  function completeAuthentication(session: AuthSession) {
+    storeSession(session);
+    window.location.reload();
+  }
+
+  function signOut() {
+    clearStoredSession();
+    window.location.reload();
+  }
 
   async function refreshDashboard() {
     await Promise.all([
@@ -314,7 +367,7 @@ export default function Home() {
       params.set("document_id", selectedDocumentId);
     }
     try {
-      const response = await fetch(`${apiBaseUrl}/conversations?${params.toString()}`);
+      const response = await apiRequest(`${apiBaseUrl}/conversations?${params.toString()}`);
       if (!response.ok) {
         throw new Error(`Conversation list request failed with ${response.status}`);
       }
@@ -327,7 +380,7 @@ export default function Home() {
 
   async function refreshKnowledgeSpaces() {
     try {
-      const response = await fetch(`${apiBaseUrl}/knowledge-spaces?limit=100`);
+      const response = await apiRequest(`${apiBaseUrl}/knowledge-spaces?limit=100`);
       if (!response.ok) {
         throw new Error(`Knowledge space list request failed with ${response.status}`);
       }
@@ -340,7 +393,7 @@ export default function Home() {
 
   async function refreshDocuments() {
     try {
-      const response = await fetch(`${apiBaseUrl}/documents?limit=100`);
+      const response = await apiRequest(`${apiBaseUrl}/documents?limit=100`);
       if (!response.ok) {
         throw new Error(`Document list request failed with ${response.status}`);
       }
@@ -353,7 +406,7 @@ export default function Home() {
 
   async function refreshMetrics() {
     try {
-      const response = await fetch(`${apiBaseUrl}/health/metrics`);
+      const response = await apiRequest(`${apiBaseUrl}/health/metrics`);
       if (!response.ok) {
         throw new Error(`Metrics request failed with ${response.status}`);
       }
@@ -365,7 +418,7 @@ export default function Home() {
 
   async function refreshIntegrations() {
     try {
-      const response = await fetch(`${apiBaseUrl}/health/integrations`);
+      const response = await apiRequest(`${apiBaseUrl}/health/integrations`);
       if (!response.ok) {
         throw new Error(`Integrations request failed with ${response.status}`);
       }
@@ -379,7 +432,7 @@ export default function Home() {
     setEvaluating(true);
     setEvaluationError(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/evaluate`, {
+      const response = await apiRequest(`${apiBaseUrl}/evaluate`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -448,7 +501,7 @@ export default function Home() {
     setCreatingSpace(true);
     setError(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/knowledge-spaces`, {
+      const response = await apiRequest(`${apiBaseUrl}/knowledge-spaces`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
@@ -541,7 +594,7 @@ export default function Home() {
         if (knowledgeSpaceId) {
           body.append("knowledge_space_id", knowledgeSpaceId);
         }
-        const response = await fetch(`${apiBaseUrl}/documents/upload`, {
+        const response = await apiRequest(`${apiBaseUrl}/documents/upload`, {
           method: "POST",
           body,
         });
@@ -607,7 +660,7 @@ export default function Home() {
     filename: string,
     onProgress?: (status: DocumentStatusResponse) => void,
   ): Promise<DocumentStatusResponse> {
-    const response = await fetch(`${apiBaseUrl}/documents/${documentId}/progress/stream`);
+    const response = await apiRequest(`${apiBaseUrl}/documents/${documentId}/progress/stream`);
     if (!response.ok || !response.body) {
       throw new Error(`Document progress stream failed with ${response.status}`);
     }
@@ -654,7 +707,7 @@ export default function Home() {
     onProgress?: (status: DocumentStatusResponse) => void,
   ): Promise<DocumentStatusResponse> {
     for (let attempt = 0; attempt < 120; attempt += 1) {
-      const response = await fetch(`${apiBaseUrl}/documents/${documentId}/progress`);
+      const response = await apiRequest(`${apiBaseUrl}/documents/${documentId}/progress`);
       if (!response.ok) {
         throw new Error(await readErrorMessage(response, `Document status request failed with ${response.status}`));
       }
@@ -696,7 +749,7 @@ export default function Home() {
     try {
       const retry = documentStatus?.status === "failed";
       const action = retry ? "retry" : "reindex";
-      const response = await fetch(`${apiBaseUrl}/documents/${documentId}/${action}`, { method: "POST" });
+      const response = await apiRequest(`${apiBaseUrl}/documents/${documentId}/${action}`, { method: "POST" });
       if (!response.ok) {
         const fallback = `${retry ? "Retry" : "Reindex"} request failed with ${response.status}`;
         throw new Error(await readErrorMessage(response, fallback));
@@ -761,7 +814,7 @@ export default function Home() {
     setUpdatingDocumentTitle(true);
     setError(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/documents/${documentId}`, {
+      const response = await apiRequest(`${apiBaseUrl}/documents/${documentId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title }),
@@ -791,7 +844,7 @@ export default function Home() {
     setDeleting(true);
     setError(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/documents/${documentId}`, { method: "DELETE" });
+      const response = await apiRequest(`${apiBaseUrl}/documents/${documentId}`, { method: "DELETE" });
       if (!response.ok) {
         throw new Error(await readErrorMessage(response, `Delete request failed with ${response.status}`));
       }
@@ -838,7 +891,7 @@ export default function Home() {
       if (typeValue) {
         params.set("chunk_type", typeValue);
       }
-      const response = await fetch(`${apiBaseUrl}/documents/${selectedDocumentId}/chunks?${params.toString()}`);
+      const response = await apiRequest(`${apiBaseUrl}/documents/${selectedDocumentId}/chunks?${params.toString()}`);
       if (!response.ok) {
         throw new Error(await readErrorMessage(response, `Chunk preview request failed with ${response.status}`));
       }
@@ -855,7 +908,7 @@ export default function Home() {
       return conversationId;
     }
     const title = buildConversationTitle(query);
-    const response = await fetch(`${apiBaseUrl}/conversations`, {
+    const response = await apiRequest(`${apiBaseUrl}/conversations`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -881,7 +934,7 @@ export default function Home() {
     setConversationLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/conversations/${selectedConversationId}`);
+      const response = await apiRequest(`${apiBaseUrl}/conversations/${selectedConversationId}`);
       if (!response.ok) {
         throw new Error(await readErrorMessage(response, `Conversation request failed with ${response.status}`));
       }
@@ -909,7 +962,7 @@ export default function Home() {
     setDeletingConversationId(selectedConversationId);
     setError(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/conversations/${selectedConversationId}`, { method: "DELETE" });
+      const response = await apiRequest(`${apiBaseUrl}/conversations/${selectedConversationId}`, { method: "DELETE" });
       if (!response.ok) {
         throw new Error(await readErrorMessage(response, `Conversation delete failed with ${response.status}`));
       }
@@ -937,7 +990,7 @@ export default function Home() {
     setUpdatingConversationId(selectedConversationId);
     setError(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/conversations/${selectedConversationId}`, {
+      const response = await apiRequest(`${apiBaseUrl}/conversations/${selectedConversationId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title }),
@@ -961,7 +1014,7 @@ export default function Home() {
   }
 
   async function runStandardQuery(activeConversationId: string) {
-    const response = await fetch(`${apiBaseUrl}/query`, {
+    const response = await apiRequest(`${apiBaseUrl}/query`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -980,7 +1033,7 @@ export default function Home() {
   }
 
   async function runStreamQuery(activeConversationId: string) {
-    const response = await fetch(`${apiBaseUrl}/query/stream`, {
+    const response = await apiRequest(`${apiBaseUrl}/query/stream`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1063,6 +1116,26 @@ export default function Home() {
     return false;
   }
 
+  if (!authReady) {
+    return (
+      <main className="authShell">
+        <Loader2 className="spin" size={24} aria-label="Loading account" />
+      </main>
+    );
+  }
+
+  if (authRequired && !authSession) {
+    return (
+      <main className="authShell">
+        <div className="authBrand">
+          <p className="eyebrow">Local RAG Console</p>
+          <h1>Multi-Agent Research Workflow</h1>
+        </div>
+        <AuthPanel apiBaseUrl={apiBaseUrl} onAuthenticated={completeAuthentication} />
+      </main>
+    );
+  }
+
   return (
     <main className="shell">
       <section className="topbar">
@@ -1070,10 +1143,39 @@ export default function Home() {
           <p className="eyebrow">Local RAG Console</p>
           <h1>Multi-Agent Research Workflow</h1>
         </div>
-        <button className="iconButton" type="button" onClick={refreshDashboard} aria-label="Refresh dashboard">
-          <RefreshCw size={18} />
-        </button>
+        <div className="topbarActions">
+          {authSession ? (
+            <div className="accountSummary">
+              <UserRound size={18} />
+              <div>
+                <strong>{authSession.user.display_name}</strong>
+                <span>{authSession.user.email}</span>
+              </div>
+              <button className="accountAction" type="button" onClick={signOut} aria-label="Sign out" title="Sign out">
+                <LogOut size={17} />
+              </button>
+            </div>
+          ) : (
+            <button className="signInButton" type="button" onClick={() => setShowAuth(true)}>
+              <LogIn size={17} />
+              Sign in
+            </button>
+          )}
+          <button className="iconButton" type="button" onClick={refreshDashboard} aria-label="Refresh dashboard">
+            <RefreshCw size={18} />
+          </button>
+        </div>
       </section>
+
+      {showAuth && !authSession && (
+        <div className="authOverlay" role="dialog" aria-modal="true" aria-label="Sign in">
+          <AuthPanel
+            apiBaseUrl={apiBaseUrl}
+            onAuthenticated={completeAuthentication}
+            onClose={() => setShowAuth(false)}
+          />
+        </div>
+      )}
 
       <section className="workspace">
         <form className="queryPanel" onSubmit={handleSubmit}>
@@ -1599,7 +1701,13 @@ export default function Home() {
               <span>Default regression set</span>
               <strong>{evaluation ? `${evaluation.passed_count}/${evaluation.case_count} passed` : "Not run"}</strong>
             </div>
-            <button className="secondaryButton" type="button" onClick={runEvaluation} disabled={evaluationDisabled}>
+            <button
+              className="secondaryButton"
+              type="button"
+              onClick={runEvaluation}
+              disabled={evaluationDisabled}
+              title={authSession ? "Local-path evaluation is unavailable while signed in" : "Run evaluation"}
+            >
               {evaluating ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
               Run Eval
             </button>

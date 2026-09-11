@@ -36,6 +36,7 @@ The application now supports persistent, versioned document indexing across Mong
 - Configurable local or Redis/Celery document task dispatch with live worker readiness
 - Optional JWT API authentication with scrypt password hashing and MongoDB user accounts
 - Per-user ownership isolation for knowledge spaces, documents, conversations, and registered-document queries
+- Frontend registration, login, tab-scoped token persistence, automatic Bearer requests, and sign-out
 - Next.js console for query, streaming, metrics, and source inspection
 - SSE workflow events with progressive answer delta rendering
 - Local evaluation runner with JSON cases and JSON report export
@@ -144,8 +145,11 @@ Run the frontend in a second terminal:
 ```powershell
 cd frontend
 npm install
+$env:NEXT_PUBLIC_AUTH_REQUIRED = "true"
 npm run dev
 ```
+
+The frontend stores the access token in `sessionStorage`, restores valid sessions after a page refresh, and clears invalid tokens after a `401` response. Set `NEXT_PUBLIC_AUTH_REQUIRED=false` to keep the unauthenticated local-development workflow available.
 
 ## Demo Guide
 
